@@ -92,7 +92,7 @@ cp config.example.yaml config.yaml
 
 Open `config.yaml` with any text editor and fill in your local paths and other parameters (model):
 
-> ⚠️ This file is specific to your machine and will never be shared on GitHub.
+> This file is specific to your machine and will never be shared on GitHub.
 
 ---
 
@@ -115,7 +115,7 @@ Place your data files in `data/raw/`. The expected files are:
 |---|---|
 | `segments_passerines_filtered.csv` | Filtered audio segments |
 | `data_morpho.csv` | Individual morphological measurements |
-| `traits_data_pc_gmm_8components_proba_filtered.csv` | Biological traits (PCA / GMM) |
+| `traits_data_pc_gmm_8components_proba_filtered.csv` | Classification of songbouts in GMM classes |
 
 ---
 
