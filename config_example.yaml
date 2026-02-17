@@ -1,0 +1,49 @@
+# Root directory
+root_dir: "Absolute/path/to/your/project/root/directory/"
+
+# Subdirectories
+data_raw_subdir: "data/raw/"
+data_processed_subdir: "data/processed/"
+audio_subdir: "Absolute/path/to/your/audio/files/"
+raw_spectrograms_subdir: "yolo_dataset/images/"
+trill_detection_subdir: "trill_detections/v2/"
+trill_spectrograms_subdir: "spectrograms_for_counting/"
+temp_subdir: "temp/"
+models_subdir: "src/models/"
+yolo_dataset_subdir: "yolo_dataset/v5"
+
+# File names
+output_csv: "annotations_trills_v2_tests.csv"
+test_csv: "annotations_trills_test.csv"
+selected_detection_model: "best_old.pt"
+
+# Model settings
+count_use_log: true
+
+# Audio parameters
+sr: 44100
+n_fft: 256
+hop_length: 64
+win_len: 2.0
+
+# Spectrogram parameters
+img_size: 640        
+cmap: "gray"  
+
+# Training parameters
+
+batch_size: 16
+epochs_seg: 20
+patience: 8
+epochs_count: 15
+
+val_split: 0.15
+
+# Device
+device: "cpu"
+
+# Trill clustering
+trill_clusters:
+  - "Fast"
+  - "Ultrafast"
+clusters_probability_threshold: 0.99
