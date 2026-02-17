@@ -732,8 +732,6 @@ def main():
 
     config = load_config_yaml(yaml_path="config.yaml")
 
-    ANNOTATOR = input("Annotator name: ").strip()
-
     df_merged = prepare_dataset(config, threshold_proba=config.clusters_probability_threshold, clusters_to_include=config.trill_clusters)
 
     # Échantillonnage stratifié
@@ -782,9 +780,11 @@ def main():
     choice = input("\nChoice (1-6): ").strip()
 
     if choice == "1":
+        ANNOTATOR = input("Annotator name: ").strip()
         manual_annotation_session(df_sample, ANNOTATOR, config)
     
     elif choice == "2":
+        ANNOTATOR = input("Annotator name: ").strip()
         assisted_annotation_session(df_sample, ANNOTATOR, config, debug=False)
     
     elif choice == "3":
