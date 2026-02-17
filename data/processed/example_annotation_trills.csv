@@ -1,0 +1,3 @@
+file_name_radical,species,segment_id,annotator,annotation_date,time_start,time_end,trill_t_start,trill_t_end,trill_min_freq,trill_max_freq,num_trills,has_trill,trill_duration
+Setophaga_americana_44334.wav,Setophaga_americana,3,test_3,2026-02-16,13.629461451247163,15.629461451247163,0.0,0.0,0.0,0.0,0,False,0.0
+Setophaga_americana_52341.wav,Setophaga_americana,2,test_3,2026-02-16,10.036173469387755,12.036173469387755,0.472693048545583,1.0752259039816645,2705.1376749673354,6187.640885867241,2,True,0.6025328554360813
