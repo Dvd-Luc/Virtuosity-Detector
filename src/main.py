@@ -639,7 +639,7 @@ def visualize_and_confirm_predictions(config, df_predictions=None):
         y, sr = librosa.load(os.path.join(config.audio_subdir, row["file_name_radical"]), sr=None)
         y_segment = y[int(seg_start * sr):int(seg_end * sr)]
         print(f"seg_start={seg_start:.2f}s, seg_end={seg_end:.2f}s, segment_duration={seg_end - seg_start:.2f}s")
-        annotate(y_segment, sr, config, prediction=prediction)
+        annotate(y_segment, sr, config, prediction=prediction, name=f"{row['file_name_radical']}  segment {row['segment_id']}")
 
 def prepare_dataset(config, threshold_proba=0.99, clusters_to_include=["Fast", "Ultrafast"]):
     """

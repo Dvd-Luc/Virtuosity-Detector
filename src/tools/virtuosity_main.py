@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import re
 import plotly.express as px
+import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from src.config import load_config_yaml
@@ -32,35 +33,98 @@ def visualize_best_virtuosity_samples(df, config, x_col="trill_rate", y_col="ban
     visualize_and_confirm_predictions(config, df_predictions=best_samples)
     
 def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_col=None, upper_bound=None, reg=None):
-    xlabel = f'{x_col} (trills/sec)'
-    ylabel = f'{y_col} (Hz)'
-    title = f'{y_col} vs {x_col}'
-
     df_plot = df.dropna(subset=[x_col, y_col])
     df_plot = df_plot[df_plot[x_col] >= 2]
+
     if logy:
         df_plot["log_bandwidth"] = np.log(df_plot[y_col] + 1e-6)
         y_col = "log_bandwidth"
         ylabel = f'log({y_col}) (log(Hz))'
         title = f'log({y_col}) vs {x_col}'
+    else:
+        ylabel = f'{y_col} (Hz)'
+        title = f'{y_col} vs {x_col}'
 
-    plt.figure(figsize=(8,6))
-    sns.scatterplot(data=df_plot, x=x_col, y=y_col, hue=hue_col, alpha=0.6)
+
+    if hue_col is not None:
+        fig = px.scatter(
+            df_plot,
+            x=x_col,
+            y=y_col,
+            color=hue_col,
+            color_continuous_scale="Viridis",
+            opacity=0.6,
+            labels={x_col: f"{x_col} (trills/sec)", y_col: ylabel},
+            title=title,
+        )
+    else:
+        fig = px.scatter(
+            df_plot,
+            x=x_col,
+            y=y_col,
+            opacity=0.6,
+            labels={x_col: f"{x_col} (trills/sec)", y_col: ylabel},
+            title=title,
+        )
 
     if upper_bound is not None and reg is not None:
-        # ub_df, reg = upper_bound_regression(df_plot, x_col=x_col, y_col=y_col)
-        plt.scatter(upper_bound[x_col], upper_bound[y_col], color="red",s=30, label="Upper bound points")
-        x_line = np.linspace(upper_bound["trill_rate"].min(), upper_bound["trill_rate"].max(), 200)
+        # Ajout des points "upper bound"
+        fig.add_trace(
+            go.Scatter(
+                x=upper_bound[x_col],
+                y=upper_bound[y_col],
+                mode="markers",
+                marker=dict(color="red", size=8),
+                name="Upper bound points",
+            )
+        )
+        # Ajout de la ligne de régression
+        x_line = np.linspace(upper_bound[x_col].min(), upper_bound[x_col].max(), 200)
         y_line = reg["intercept"] + reg["slope"] * x_line
-        plt.plot(x_line, y_line, "r--", label="Upper-bound regression")
-        title += f"\nUpper-bound regression: y = {reg['intercept']:.2f} + {reg['slope']:.2f}*x (R={reg['r_value']:.2f}, p={reg['p_value']:.3e})"
+        fig.add_trace(
+            go.Scatter(
+                x=x_line,
+                y=y_line,
+                mode="lines",
+                line=dict(color="red", dash="dash"),
+                name=f"Upper-bound regression: y = {reg['intercept']:.2f} + {reg['slope']:.2f}*x (R={reg['r_value']:.2f}, p={reg['p_value']:.3e})",
+            )
+        )
+
+    # Mise en forme
+    fig.update_layout(
+        xaxis_title=f"{x_col} (trills/sec)",
+        yaxis_title=ylabel,
+        title=title,
+        showlegend=True,
+        # grid=True,
+    )
+
+    # Affichage
+    fig.show()
+
+    # plt.figure(figsize=(8,6))
+    # if hue_col is not None:
+    #     hue_norm = plt.Normalize(df[hue_col].min(), df[hue_col].max())
+    #     palette = sns.color_palette("viridis", as_cmap=True)
+    #     sns.scatterplot(data=df_plot, x=x_col, y=y_col, hue=hue_col, hue_norm=hue_norm, alpha=0.6, palette=palette)
+    # else:
+    #     sns.scatterplot(data=df_plot, x=x_col, y=y_col, color="blue", alpha=0.6)
+
+    # if upper_bound is not None and reg is not None:
+    #     # ub_df, reg = upper_bound_regression(df_plot, x_col=x_col, y_col=y_col)
+    #     plt.scatter(upper_bound[x_col], upper_bound[y_col], color="red",s=30, label="Upper bound points")
+    #     x_line = np.linspace(upper_bound["trill_rate"].min(), upper_bound["trill_rate"].max(), 200)
+    #     y_line = reg["intercept"] + reg["slope"] * x_line
+    #     plt.plot(x_line, y_line, "r--", label="Upper-bound regression")
+    #     title += f"\nUpper-bound regression: y = {reg['intercept']:.2f} + {reg['slope']:.2f}*x (R={reg['r_value']:.2f}, p={reg['p_value']:.3e})"
     
-    plt.xlabel(f"{xlabel}")
-    plt.ylabel(f"{ylabel}")
-    plt.title(f"{title}")
-    plt.xlim(0, 200)
-    plt.grid(True)
-    plt.show()
+    # plt.xlabel(f"{xlabel}")
+    # plt.ylabel(f"{ylabel}")
+    # plt.title(f"{title}")
+    # # plt.xlim(0, 200)
+    # plt.grid(True)
+    # plt.show()
 
 def plot_dist_vs_traits_plotly(df, hue_col, title_suffix):
     traits = [
@@ -84,8 +148,8 @@ def plot_dist_vs_traits_plotly(df, hue_col, title_suffix):
 
         fig_px = px.scatter(
             df,
-            x="dist_to_bound",
-            y=col,
+            x=col,
+            y="dist_to_bound",
             color=hue_col,
             opacity=0.7,
             hover_data={
@@ -100,11 +164,11 @@ def plot_dist_vs_traits_plotly(df, hue_col, title_suffix):
             trace.showlegend = (i == 0)
             fig.add_trace(trace, row=row, col=col_i)
 
-        fig.update_yaxes(title_text=label, row=row, col=col_i)
-        fig.update_xaxes(title_text="Distance to performance bound", row=row, col=col_i)
+        fig.update_yaxes(title_text="Distance to performance bound", row=row, col=col_i)
+        fig.update_xaxes(title_text=label, row=row, col=col_i)
 
     fig.update_layout(
-        title=f"Distance to performance bound vs morphology ({title_suffix})",
+        title=f"Morphology ({title_suffix}) vs Distance to Performance Bound",
         height=900,
         width=2000,
         legend_title_text=hue_col,
@@ -269,6 +333,7 @@ def load_meta_and_morpho(DATA_DIR, file_timestamps, file_meta, file_morpho):
     df_timestamps = pd.read_csv(os.path.join(DATA_DIR, file_timestamps))
     df_metadata = pd.read_csv(os.path.join(DATA_DIR, file_meta))
     df_morpho = pd.read_csv(os.path.join(DATA_DIR, file_morpho))
+    df_morpho["logmass"] = np.log(df_morpho["mass"])
 
     df_timestamps["file_name"] = df_timestamps.apply(
         lambda r: r["file_name"].rsplit(".", 1)[0] + f"_seg{r['syllable_rank']}.wav",
@@ -338,7 +403,7 @@ def main():
             x_col="trill_rate",
             y_col="bandwidth",
             logy=log_y,
-            hue_col="family",
+            hue_col="logmass",
             upper_bound=ub_df if show_bound else None,
             reg=reg if show_bound else None
         )
@@ -360,6 +425,7 @@ def main():
             top_n=5,
             plot=True
         )
+        
     elif choice == "4":
         df_out = df_merged.copy()
         output_final = os.path.join(config.data_processed_subdir, "final_virtuosity_dataset2.csv")

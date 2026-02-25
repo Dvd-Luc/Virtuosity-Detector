@@ -10,7 +10,7 @@ import sounddevice as sd
 from src.config import TrillConfig
 
 
-def annotate(signal, sr, config:TrillConfig, prediction = None):
+def annotate(signal, sr, config:TrillConfig, prediction = None, name=None):
     """
     Display a spectrogram of an audio segment and allow the user to manually annotate trill regions.
 
@@ -62,7 +62,9 @@ def annotate(signal, sr, config:TrillConfig, prediction = None):
 
     manager = plt.get_current_fig_manager()
     manager.full_screen_toggle()
-    fig.suptitle("Select trill region and enter count", fontsize=16)
+    suptitle_text = f"{name} \n" if name else ""
+    suptitle_text += "Select trill region and enter count"
+    fig.suptitle(suptitle_text, fontsize=16)
 
 
     librosa.display.specshow(
