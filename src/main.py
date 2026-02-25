@@ -594,7 +594,7 @@ def predict_whole_dataset(df_audio_files, config, stop_debug = False):
     df_results.to_csv(os.path.join(config.output_csv.replace(".csv", "_predictions.csv")), index=False)
     print(f"\n✓ Saved predictions for {len(df_results)} segments")
 
-def visualize_and_confirm_predictions(config):
+def visualize_and_confirm_predictions(config, df_predictions=None):
     """
     Visualize model predictions and allow manual confirmation.
 
@@ -612,12 +612,17 @@ def visualize_and_confirm_predictions(config):
     -------
     None
     """
-
-    df_predictions = pd.read_csv(os.path.join(config.output_csv.replace(".csv", "_predictions.csv")))
+    if df_predictions is None:
+        df_predictions = pd.read_csv(os.path.join(config.output_csv.replace(".csv", "_predictions.csv")))
+        print("Loading prediction file")
+    print(df_predictions.columns)
+    
     for idx, row in df_predictions.iterrows():
         if pd.isna(row["t_min"]) or pd.isna(row["t_max"]) or pd.isna(row["f_min"]) or pd.isna(row["f_max"]):
             continue
-        
+
+        print(row["file_name_radical"], row["segment_id"])
+
         prediction = {
             "t_min": row["t_min"],
             "t_max": row["t_max"],

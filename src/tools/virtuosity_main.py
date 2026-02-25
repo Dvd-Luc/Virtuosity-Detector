@@ -1,4 +1,5 @@
 import os
+import librosa
 import numpy as np
 import pandas as pd
 from scipy.stats import linregress
@@ -9,9 +10,28 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 
 from src.config import load_config_yaml
+from src.main import visualize_and_confirm_predictions
 
+def visualize_best_virtuosity_samples(df, config, x_col="trill_rate", y_col="bandwidth", sorting_metric="dist_to_bound", bin_width=2.0, top_n=5, plot=False):
+    df_plot = df.dropna(subset=[sorting_metric])
 
-def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, upper_bound=None, reg=None):
+    x_min = df_plot[x_col].min()
+    x_max = df_plot[x_col].max()
+    bins = np.arange(x_min, x_max + bin_width, bin_width)
+    df_plot["bin"] = pd.cut(df_plot[x_col], bins=bins, include_lowest=True)
+
+    best_samples = (
+        df_plot.sort_values(sorting_metric)
+        .groupby("bin")
+        .head(top_n)
+    )
+
+    if plot:
+        plot_virtuosity(best_samples, x_col=x_col, y_col=y_col, logy=False, upper_bound=None, reg=None)
+
+    visualize_and_confirm_predictions(config, df_predictions=best_samples)
+    
+def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_col=None, upper_bound=None, reg=None):
     xlabel = f'{x_col} (trills/sec)'
     ylabel = f'{y_col} (Hz)'
     title = f'{y_col} vs {x_col}'
@@ -25,7 +45,7 @@ def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, upper
         title = f'log({y_col}) vs {x_col}'
 
     plt.figure(figsize=(8,6))
-    sns.scatterplot(data=df_plot, x=x_col, y=y_col, alpha=0.6)
+    sns.scatterplot(data=df_plot, x=x_col, y=y_col, hue=hue_col, alpha=0.6)
 
     if upper_bound is not None and reg is not None:
         # ub_df, reg = upper_bound_regression(df_plot, x_col=x_col, y_col=y_col)
@@ -55,7 +75,7 @@ def plot_dist_vs_traits_plotly(df, hue_col, title_suffix):
         cols=2,
         subplot_titles=[t[1] for t in traits],
         shared_xaxes=True,
-        shared_yaxes=False,   # 🔑 axes Y indépendants
+        shared_yaxes=False,
     )
 
     for i, (col, label) in enumerate(traits):
@@ -77,7 +97,7 @@ def plot_dist_vs_traits_plotly(df, hue_col, title_suffix):
         )
 
         for trace in fig_px.data:
-            trace.showlegend = (i == 0)  # légende une seule fois
+            trace.showlegend = (i == 0)
             fig.add_trace(trace, row=row, col=col_i)
 
         fig.update_yaxes(title_text=label, row=row, col=col_i)
@@ -255,13 +275,13 @@ def load_meta_and_morpho(DATA_DIR, file_timestamps, file_meta, file_morpho):
         axis=1
     )
 
-    df_metadata["file_name_radical"] = df_metadata["file_name"].apply(
-        lambda x: re.sub(r"_seg\d+\.wav$", ".wav", x)
-    )
+    # df_metadata["file_name_radical"] = df_metadata["file_name"].apply(
+    #     lambda x: re.sub(r"_seg\d+\.wav$", ".wav", x)
+    # )
 
     df_metadata_sub = df_metadata[
         ['gen', 'family', 'species', 'sub_species', 'common_name', 'recordist', 'date', 'time',
-            'country', 'location', 'lat', 'lng', 'bird', 'file_name', 'file_name_radical',
+            'country', 'location', 'lat', 'lng', 'bird', 'file_name',
             'gmm_cluster', 'gmm_prob_1', 'gmm_prob_2', 'gmm_prob_4']
     ]
 
@@ -286,12 +306,12 @@ def main():
     pred_annotation_file = "annotations_trills_v2_tests_predictions.csv"
     file_timestamps = "segments_passerines_filtered.csv"
     file_meta = "traits_data_pc_gmm_8components_proba_filtered.csv"
-    file_morpho = "data_morpho.csv"
+    file_morpho = "model_traits_morpho_social_data.csv"
 
     df_pred = pd.read_csv(os.path.join(config.data_processed_subdir, pred_annotation_file))
 
     df_pred_filtered, ub_df, reg = prepare_dataset(df_pred)
-
+    
     df_merged = load_meta_and_morpho(config.data_raw_subdir, file_timestamps, file_meta, file_morpho)
     df_merged = pd.merge(df_pred_filtered, df_merged, on="file_name", how="inner")
 
@@ -300,8 +320,10 @@ def main():
     print("="*70)
     print("1. Plot virtuosity space and upper bound regression")
     print("2. Plot viruosity against morphology metrics")
+    print("3. Visualize top virtuosity samples and confirm predictions")
+    print("4. Export final dataset")
 
-    choice = input("\nChoice (1-2): ").strip()
+    choice = input("\nChoice (1-4): ").strip()
 
     if choice == "1":
         input_log_y = input("Log-transform bandwidth for plotting? (y/n): ").strip().lower()
@@ -312,10 +334,11 @@ def main():
         show_bound = input_show_bound == "y"
 
         plot_virtuosity(
-            df_pred_filtered,
+            df_merged,
             x_col="trill_rate",
             y_col="bandwidth",
             logy=log_y,
+            hue_col="family",
             upper_bound=ub_df if show_bound else None,
             reg=reg if show_bound else None
         )
@@ -327,6 +350,21 @@ def main():
             hue_col="family",
             title_suffix="colored by family"
         )
+
+    elif choice == "3":
+        visualize_best_virtuosity_samples(
+            df_merged,
+            config,
+            sorting_metric="dist_to_bound",
+            bin_width=5.0,
+            top_n=5,
+            plot=True
+        )
+    elif choice == "4":
+        df_out = df_merged.copy()
+        output_final = os.path.join(config.data_processed_subdir, "final_virtuosity_dataset2.csv")
+        os.makedirs(os.path.dirname(output_final), exist_ok=True)
+        df_out.to_csv(output_final, index=False)
 
     else:
         print("Invalid choice")
