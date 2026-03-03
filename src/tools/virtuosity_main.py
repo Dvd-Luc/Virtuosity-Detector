@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 
 from src.config import load_config_yaml
 from src.main import visualize_and_confirm_predictions
+from src.utils.gui_visualizer import launch_gui
 
 def visualize_best_virtuosity_samples(df, config, x_col="trill_rate", y_col="bandwidth", sorting_metric="dist_to_bound", bin_width=2.0, top_n=5, plot=False):
     df_plot = df.dropna(subset=[sorting_metric])
@@ -68,7 +69,7 @@ def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_c
         )
 
     if upper_bound is not None and reg is not None:
-        # Ajout des points "upper bound"
+
         fig.add_trace(
             go.Scatter(
                 x=upper_bound[x_col],
@@ -78,7 +79,7 @@ def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_c
                 name="Upper bound points",
             )
         )
-        # Ajout de la ligne de régression
+
         x_line = np.linspace(upper_bound[x_col].min(), upper_bound[x_col].max(), 200)
         y_line = reg["intercept"] + reg["slope"] * x_line
         fig.add_trace(
@@ -91,7 +92,6 @@ def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_c
             )
         )
 
-    # Mise en forme
     fig.update_layout(
         xaxis_title=f"{x_col} (trills/sec)",
         yaxis_title=ylabel,
@@ -100,7 +100,6 @@ def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_c
         # grid=True,
     )
 
-    # Affichage
     fig.show()
 
     # plt.figure(figsize=(8,6))
@@ -306,13 +305,24 @@ def prepare_dataset(df):
         axis=1
     )
     df["bandwidth"] = df["f_max"] - df["f_min"]
+    df["bandwidth_podos"] = df["f_max_podos"] - df["f_min_podos"]
 
-    df_filtered = df[df["trill_rate"] >= 2]
+    # df_filtered = df[df["trill_rate"] >= 2]
+    df_filtered = df.copy()
 
     ub_df, reg = upper_bound_regression(
         df_filtered,
         x_col="trill_rate",
         y_col="bandwidth",
+        bin_width=2.0,
+        x_min=2,
+        log_y=False
+    )
+
+    ub_df_podos, reg_podos = upper_bound_regression(
+        df_filtered,
+        x_col="trill_rate",
+        y_col="bandwidth_podos",
         bin_width=2.0,
         x_min=2,
         log_y=False
@@ -326,7 +336,22 @@ def prepare_dataset(df):
         signed=True
     )
 
-    return df_filtered, ub_df, reg
+    df_filtered["dist_to_bound_podos"] = distance_to_upper_bound(
+        df_filtered,
+        reg_podos,
+        x_col="trill_rate",
+        y_col="bandwidth_podos",
+        signed=True
+    )
+
+    regression_results = {
+        "reg": reg,
+        "ub_df": ub_df,
+        "reg_podos": reg_podos,
+        "ub_df_podos": ub_df_podos
+    }
+
+    return df_filtered, regression_results
 
 def load_meta_and_morpho(DATA_DIR, file_timestamps, file_meta, file_morpho):
 
@@ -375,7 +400,7 @@ def main():
 
     df_pred = pd.read_csv(os.path.join(config.data_processed_subdir, pred_annotation_file))
 
-    df_pred_filtered, ub_df, reg = prepare_dataset(df_pred)
+    df_pred_filtered, regression_results = prepare_dataset(df_pred)
     
     df_merged = load_meta_and_morpho(config.data_raw_subdir, file_timestamps, file_meta, file_morpho)
     df_merged = pd.merge(df_pred_filtered, df_merged, on="file_name", how="inner")
@@ -387,23 +412,34 @@ def main():
     print("2. Plot viruosity against morphology metrics")
     print("3. Visualize top virtuosity samples and confirm predictions")
     print("4. Export final dataset")
+    print("5. Launch GUI visualizer")
 
-    choice = input("\nChoice (1-4): ").strip()
+    choice = input("\nChoice (1-5): ").strip()
 
     if choice == "1":
+        ub_df = regression_results["ub_df"]
+        reg = regression_results["reg"]
+        show_bound = False
+
         input_log_y = input("Log-transform bandwidth for plotting? (y/n): ").strip().lower()
         log_y = input_log_y == "y"
 
-        
-        input_show_bound = input("Show upper bound regression on plot? (y/n): ").strip().lower()
-        show_bound = input_show_bound == "y"
+        if not log_y:
+            input_use_podos = input("Use Podos bandwidth for plotting? (y/n): ").strip().lower()
+            use_podos = input_use_podos == "y"
+            if use_podos:
+                ub_df = regression_results["ub_df_podos"]
+                reg = regression_results["reg_podos"]
+
+            input_show_bound = input("Show upper bound regression on plot? (y/n): ").strip().lower()
+            show_bound = input_show_bound == "y"
 
         plot_virtuosity(
             df_merged,
             x_col="trill_rate",
-            y_col="bandwidth",
+            y_col="bandwidth" if not use_podos else "bandwidth_podos",
             logy=log_y,
-            hue_col="logmass",
+            # hue_col="logmass",
             upper_bound=ub_df if show_bound else None,
             reg=reg if show_bound else None
         )
@@ -428,9 +464,12 @@ def main():
         
     elif choice == "4":
         df_out = df_merged.copy()
-        output_final = os.path.join(config.data_processed_subdir, "final_virtuosity_dataset2.csv")
+        output_final = os.path.join(config.data_processed_subdir, "final_virtuosity_dataset_v3.csv")
         os.makedirs(os.path.dirname(output_final), exist_ok=True)
         df_out.to_csv(output_final, index=False)
+
+    elif choice == "5":
+        launch_gui(config, df_merged, metric_col = "dist_to_bound")
 
     else:
         print("Invalid choice")
