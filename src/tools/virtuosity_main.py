@@ -102,29 +102,6 @@ def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_c
 
     fig.show()
 
-    # plt.figure(figsize=(8,6))
-    # if hue_col is not None:
-    #     hue_norm = plt.Normalize(df[hue_col].min(), df[hue_col].max())
-    #     palette = sns.color_palette("viridis", as_cmap=True)
-    #     sns.scatterplot(data=df_plot, x=x_col, y=y_col, hue=hue_col, hue_norm=hue_norm, alpha=0.6, palette=palette)
-    # else:
-    #     sns.scatterplot(data=df_plot, x=x_col, y=y_col, color="blue", alpha=0.6)
-
-    # if upper_bound is not None and reg is not None:
-    #     # ub_df, reg = upper_bound_regression(df_plot, x_col=x_col, y_col=y_col)
-    #     plt.scatter(upper_bound[x_col], upper_bound[y_col], color="red",s=30, label="Upper bound points")
-    #     x_line = np.linspace(upper_bound["trill_rate"].min(), upper_bound["trill_rate"].max(), 200)
-    #     y_line = reg["intercept"] + reg["slope"] * x_line
-    #     plt.plot(x_line, y_line, "r--", label="Upper-bound regression")
-    #     title += f"\nUpper-bound regression: y = {reg['intercept']:.2f} + {reg['slope']:.2f}*x (R={reg['r_value']:.2f}, p={reg['p_value']:.3e})"
-    
-    # plt.xlabel(f"{xlabel}")
-    # plt.ylabel(f"{ylabel}")
-    # plt.title(f"{title}")
-    # # plt.xlim(0, 200)
-    # plt.grid(True)
-    # plt.show()
-
 def plot_dist_vs_traits_plotly(df, hue_col, title_suffix):
     traits = [
         ("mass", "Mass"),
