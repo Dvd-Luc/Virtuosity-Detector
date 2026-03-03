@@ -134,6 +134,8 @@ logs/
 
 # Data files
 *.csv
+*.npy
+*.npz
 *.tsv
 *.h5
 !example*.csv

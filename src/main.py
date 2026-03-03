@@ -487,6 +487,9 @@ def predict_box_and_trill_rate(row_audio, config, seg_model, debug=False):
         verbose=False,
     )
 
+    if os.path.exists(out_path):
+        os.remove(out_path)  # clean up temporary spectrogram file
+
     pred = pred[0]  # prendre la première (et unique) prédiction du batch   
     
     if pred.boxes is None or len(pred.boxes) == 0:
@@ -503,17 +506,10 @@ def predict_box_and_trill_rate(row_audio, config, seg_model, debug=False):
                                                                     y2, 
                                                                     config.win_len, 
                                                                     sr/2)
-        prediction = {
-            "t_min": float(t_min),
-            "t_max": float(t_max),
-            "f_min": float(f_min),
-            "f_max": float(f_max),
-            "confidence": conf,
-            "count": 0
-        }
 
-        trill_t_start = start + prediction["t_min"]
-        trill_t_end = start + prediction["t_max"]
+
+        trill_t_start = start + float(t_min)
+        trill_t_end = start + float(t_max)
         trill_duration = trill_t_end - trill_t_start
 
         sample_start = int(trill_t_start * sr)
@@ -521,10 +517,21 @@ def predict_box_and_trill_rate(row_audio, config, seg_model, debug=False):
 
         y_segment_cropped = y[int(sample_start):int(sample_end)]
 
+        f_min_podos, f_max_podos = get_bandwidth_podos(y_segment_cropped, sr, config.n_fft, config.hop_length)
+
         trill_rate = estimate_trill_rate(y_segment_cropped, sr, hop_length=config.hop_length, debug=debug)
         count = int(np.round(trill_rate * trill_duration))
-        prediction["count"] = count
 
+        prediction = {
+            "t_min": float(t_min),
+            "t_max": float(t_max),
+            "f_min": float(f_min),
+            "f_max": float(f_max),
+            "f_min_podos": float(f_min_podos),
+            "f_max_podos": float(f_max_podos),
+            "confidence": conf,
+            "count": count
+        }
     return y_segment, sr, start, end, prediction
 
 def predict_whole_dataset(df_audio_files, config, stop_debug = False):
@@ -563,6 +570,7 @@ def predict_whole_dataset(df_audio_files, config, stop_debug = False):
             break
 
         _, _,seg_start, seg_end, prediction = predict_box_and_trill_rate(row, config, seg_model, debug=False)
+
         if prediction is not None:
             results.append({
                 "file_name_radical": row["file_name_radical"],
@@ -573,6 +581,8 @@ def predict_whole_dataset(df_audio_files, config, stop_debug = False):
                 "t_max": prediction["t_max"],
                 "f_min": prediction["f_min"],
                 "f_max": prediction["f_max"],
+                "f_min_podos": prediction["f_min_podos"],
+                "f_max_podos": prediction["f_max_podos"],
                 "confidence": prediction["confidence"],
                 "count": prediction["count"]
             })
@@ -586,12 +596,16 @@ def predict_whole_dataset(df_audio_files, config, stop_debug = False):
                 "t_max": None,
                 "f_min": None,
                 "f_max": None,
+                "f_min_podos": None,
+                "f_max_podos": None,
                 "confidence": None,
                 "count": 0
             })
     
     df_results = pd.DataFrame(results)
-    df_results.to_csv(os.path.join(config.output_csv.replace(".csv", "_predictions.csv")), index=False)
+    output_name = "_predictions.csv" if not stop_debug else "_predictions_debug2.csv"
+    output_path = os.path.join(config.output_csv.replace(".csv", output_name))
+    df_results.to_csv(output_path, index=False)
     print(f"\n✓ Saved predictions for {len(df_results)} segments")
 
 def visualize_and_confirm_predictions(config, df_predictions=None):
@@ -801,7 +815,10 @@ def main():
         shape_segments(config.trill_detection_subdir, config.trill_spectrograms_subdir)  # H, W
 
     elif choice == "5":
-        predict_whole_dataset(df_remaining, config, stop_debug=False)
+        os.environ['TK_SILENCE_DEPRECATION'] = '1'  # Ignore les warnings Tkinter
+        os.environ['MPLBACKEND'] = 'Agg'  # Désactive l'affichage Matplotlib
+        os.environ['QT_QPA_PLATFORM'] = 'offscreen' 
+        predict_whole_dataset(df_merged, config, stop_debug=False)
 
     elif choice == "6":
         visualize_and_confirm_predictions(config)
