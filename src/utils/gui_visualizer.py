@@ -9,19 +9,94 @@ GUI Visualizer for Trill Predictions Spectrograms
 import os, types, tempfile, webbrowser
 import tkinter as tk
 from tkinter import ttk, messagebox
+import tkinter.filedialog as fd
 import numpy as np
 import pandas as pd
 import librosa
 import matplotlib
+import sounddevice as sd
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import plotly.express as px
+from scipy.stats import linregress
 
 
 # ─────────────────────────────────────────────
 # Audio helpers
 # ─────────────────────────────────────────────
+def upper_bound_regression(
+    df,
+    x_col="trill_rate",
+    y_col="bandwidth",
+    bin_width=2.0,
+    x_min=2,
+    x_max=None,
+    log_y=False
+):
+    """
+    Compute an upper-bound regression using binned maxima (Podos-style).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe
+    x_col : str
+        X variable (e.g. trill_rate)
+    y_col : str
+        Y variable (e.g. bandwidth)
+    bin_width : float
+        Bin width in X units (Hz)
+    x_min : float
+        Minimum X to consider
+    x_max : float or None
+        Maximum X to consider (None = inferred from data)
+    log_y : bool
+        Whether to log-transform Y before regression
+
+    Returns
+    -------
+    ub_df : pd.DataFrame
+        Upper-bound points (bin_center, x, y)
+    reg : dict
+        Regression results (slope, intercept, r, p, stderr)
+    """
+
+    df = df[[x_col, y_col]].dropna()
+    df = df[df[x_col] >= x_min]
+
+    if x_max is None:
+        x_max = df[x_col].max()
+
+    # Define bins
+    bins = np.arange(x_min, x_max + bin_width, bin_width)
+    df["bin"] = pd.cut(df[x_col], bins=bins, include_lowest=True)
+
+    # Select max Y per bin
+    ub = (
+        df.loc[df.groupby("bin")[y_col].idxmax()]
+        .sort_values(x_col)
+        .copy()
+    )
+
+    if log_y:
+        ub["y_reg"] = np.log(ub[y_col] + 1e-9)
+    else:
+        ub["y_reg"] = ub[y_col]
+
+    # Regression
+    res = linregress(ub[x_col], ub["y_reg"])
+
+    reg = {
+        "slope": res.slope,
+        "intercept": res.intercept,
+        "r_value": res.rvalue,
+        "p_value": res.pvalue,
+        "stderr": res.stderr,
+        "n": len(ub)
+    }
+
+    return ub, reg
 
 def load_spectrogram(row, config):
     audio_path = os.path.join(config.audio_subdir, str(row["file_name_radical"]))
@@ -55,7 +130,7 @@ def draw_spectrogram(ax, S_db, times, freqs,
         ax.add_patch(plt.Rectangle(
             (t_min, f_min), t_max - t_min, f_max - f_min,
             lw=1.5, edgecolor="cyan", facecolor="none", linestyle="--"))
-
+        
 
 # ════════════════════════════════════════════════════════
 # Main App
@@ -103,7 +178,18 @@ class SpectroViewer(tk.Tk):
             tk.Radiobutton(h, text=txt, variable=self.spectro_mode, value=val,
                         fg=self.FG, bg=self.BG2, selectcolor=self.SURF,
                         activebackground=self.BG2).pack(side="left", padx=4)
-        
+            
+        tk.Label(h, text="Play:", fg=self.FG2, bg=self.BG2).pack(side="left", padx=(24, 4))
+        tk.Button(h, text="▶ Segment", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
+                command=lambda: self._play_audio(self._current_row, mode="segment")
+                ).pack(side="left", padx=2)
+        tk.Button(h, text="▶ Prediction ±10%", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
+                command=lambda: self._play_audio(self._current_row, mode="prediction")
+                ).pack(side="left", padx=2)
+        tk.Button(h, text="⏹", bg=self.SURF, fg=self.FG, relief="flat", padx=6,
+                command=sd.stop).pack(side="left", padx=2)
+        self._current_row = None 
+
         tk.Label(h, text=f"{len(self.df)} samples", fg=self.GRN, bg=self.BG2,
                  font=("Helvetica", 9)).pack(side="right", padx=16)
 
@@ -165,20 +251,41 @@ class SpectroViewer(tk.Tk):
 
     def _opt1_load_values(self):
         col = self.tax_level.get()
-        if col in self.df.columns:
-            vals = sorted(self.df[col].dropna().unique().tolist())
-            self.tax_cb["values"] = vals
-            if vals: self.tax_val.set(vals[0]); self._opt1_update_stats()
+        if col not in self.df.columns:
+            self.tax_cb["values"] = []; return
+
+        has_pred  = set(self.df.dropna(subset=["t_min"])[col].dropna().unique())
+        all_vals  = sorted(self.df[col].dropna().unique().tolist())
+
+        display   = [v if v in has_pred else f"{v}  ⚠ no prediction" for v in all_vals]
+        self._tax_display_map = dict(zip(display, all_vals))
+        self.tax_cb["values"] = display
+        if display:
+            self.tax_val.set(display[0])
+            self._opt1_update_stats()
 
     def _opt1_sub(self):
-        return self.df[self.df[self.tax_level.get()] == self.tax_val.get()]
+        col = self.tax_level.get()
+        raw_val = self._tax_display_map.get(self.tax_val.get(), self.tax_val.get())
+        return self.df[self.df[col] == raw_val]
 
     def _opt1_update_stats(self):
         sub = self._opt1_sub(); m = self.metric_col
         for v in self.sv.values(): v.set(False)
-        if m not in sub.columns or sub.empty:
-            for s in self.sl: self.sl[s].config(text="—"); return
-        vals = sub[m].dropna()
+
+        sub_pred = sub.dropna(subset=["t_min"])
+
+        if sub_pred.empty:
+            for s in self.sl: self.sl[s].config(text="—")
+            # Display a random spectrogram from the group if no predictions are available, to at least show something relevant
+            if not sub.empty:
+                rand_row = sub.sample(1).iloc[0]
+                self._show(self.ax1, self.c1, rand_row,
+                        prefix="[no prediction — random segment]  ")
+            return
+
+        # Stats for the metric column, only on rows with predictions
+        vals = sub_pred[m].dropna()
         self.sl["count"].config(text=str(len(vals)))
         self.sl["min"].config(text=f"{vals.min():.4f}")
         self.sl["max"].config(text=f"{vals.max():.4f}")
@@ -189,12 +296,15 @@ class SpectroViewer(tk.Tk):
         for s, v in self.sv.items():
             if s != stat: v.set(False)
         if not self.sv[stat].get(): return
-        sub = self._opt1_sub(); m = self.metric_col
-        vals = sub[m].dropna()
-        idx = {"min": vals.idxmin, "max": vals.idxmax,
-               "mean": lambda: (vals - vals.mean()).abs().idxmin(),
-               "median": lambda: (vals - vals.median()).abs().idxmin()}[stat]()
-        self._show(self.ax1, self.c1, sub.loc[idx])
+        sub      = self._opt1_sub()
+        sub_pred = sub.dropna(subset=["t_min"])
+        if sub_pred.empty: return
+        vals = sub_pred[self.metric_col].dropna()
+        idx = {"min":    vals.idxmin,
+            "max":    vals.idxmax,
+            "mean":   lambda: (vals - vals.mean()).abs().idxmin(),
+            "median": lambda: (vals - vals.median()).abs().idxmin()}[stat]()
+        self._show(self.ax1, self.c1, sub_pred.loc[idx])
 
     # ════════════════════════════════════════════
     # TAB 2
@@ -225,6 +335,10 @@ class SpectroViewer(tk.Tk):
         tk.Button(ctrl, text="Build List ▶", bg=self.ACC, fg=self.BG2,
                   font=("Helvetica", 9, "bold"), relief="flat", padx=10,
                   command=self._t2_build).pack(side="left", padx=14)
+        
+        tk.Button(ctrl, text="📂 Load CSV", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
+          command=self._t2_load_csv).pack(side="left", padx=4)
+        
         self.li_lbl = tk.Label(ctrl, text="No list yet", fg=self.FG2, bg=self.BG)
         self.li_lbl.pack(side="left")
         # Nav
@@ -234,6 +348,9 @@ class SpectroViewer(tk.Tk):
         tk.Button(nav, text="◀", command=self._t2_prev, **bcfg).pack(side="left", padx=4)
         tk.Button(nav, text="▶", command=self._t2_next, **bcfg).pack(side="left", padx=4)
         tk.Label(nav, text="Jump:", fg=self.FG2, bg=self.BG2).pack(side="left", padx=(16, 4))
+        tk.Button(nav, text="＋ Export row", bg=self.GRN, fg=self.BG2, relief="flat", padx=8,
+          command=lambda: self._export_to_csv(self.lst[self.lidx]) if self.lst else None
+          ).pack(side="left", padx=8)
         self.jv = tk.StringVar()
         self.jcb = ttk.Combobox(nav, textvariable=self.jv, width=50); self.jcb.pack(side="left")
         self.jcb.bind("<<ComboboxSelected>>", lambda _: self._t2_jump())
@@ -304,6 +421,21 @@ class SpectroViewer(tk.Tk):
         tk.Button(ctrl, text="Open Plotly →", bg=self.GRN, fg=self.BG2,
                 font=("Helvetica", 9, "bold"), relief="flat", padx=10,
                 command=self._t3_plotly).pack(side="left", padx=14)
+        
+        self.ub_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(ctrl, text="Upper bound regression", variable=self.ub_var,
+                    fg=self.FG, bg=self.BG, selectcolor=self.SURF,
+                    activebackground=self.BG).pack(side="left", padx=8)
+
+        tk.Label(ctrl, text="bin_width:", fg=self.FG2, bg=self.BG).pack(side="left", padx=(8,2))
+        self.ub_bin = tk.DoubleVar(value=2.0)
+        tk.Entry(ctrl, textvariable=self.ub_bin, width=5,
+                bg=self.SURF, fg=self.FG, insertbackground="white").pack(side="left")
+
+        self.ub_logy = tk.BooleanVar(value=False)
+        tk.Checkbutton(ctrl, text="log Y", variable=self.ub_logy,
+                    fg=self.FG, bg=self.BG, selectcolor=self.SURF,
+                    activebackground=self.BG).pack(side="left", padx=4)
 
         tk.Label(self.t3,
                 text="Click 'Open Plotly →' → hover a point to get its index → enter it below.",
@@ -316,6 +448,11 @@ class SpectroViewer(tk.Tk):
                 bg=self.SURF, fg=self.FG, insertbackground="white").pack(side="left", padx=4)
         tk.Button(pick, text="Show", bg=self.ACC, fg=self.BG2, relief="flat", padx=10,
                 command=self._t3_show).pack(side="left", padx=4)
+        
+        tk.Button(pick, text="＋ Export row", bg=self.GRN, fg=self.BG2, relief="flat", padx=8,
+          command=lambda: self._export_to_csv(
+              getattr(self, "_plotly_df", self.df).iloc[self.pick_idx.get()]
+          )).pack(side="left", padx=6)
 
         self.fig3, self.ax3 = plt.subplots(figsize=(10, 3.4), facecolor=self.BG2)
         self.ax3.set_facecolor(self.BG2)
@@ -342,6 +479,30 @@ class SpectroViewer(tk.Tk):
         fig.update_traces(marker=dict(size=9 if not size else None, line=dict(width=0)))
         fig.update_layout(paper_bgcolor="#1e1e2e", plot_bgcolor="#181825",
                         hoverlabel=dict(bgcolor="#313244", font_color="#cdd6f4"))
+        
+        # Upper bound regression (max per bin + linear fit)
+        if self.ub_var.get():
+            ub_df, reg = upper_bound_regression(
+                df, x_col=x, y_col=y,
+                bin_width=self.ub_bin.get(),
+                log_y=self.ub_logy.get()
+            )
+            # Points des maxima par bin
+            fig.add_scatter(x=ub_df[x], y=ub_df[y],
+                            mode="markers", name="UB points",
+                            marker=dict(color="#f38ba8", size=10, symbol="diamond"))
+            # Droite de régression
+            x_line = np.linspace(df[x].min(), df[x].max(), 200)
+            if self.ub_logy.get():
+                y_line = np.exp(reg["slope"] * x_line + reg["intercept"])
+            else:
+                y_line = reg["slope"] * x_line + reg["intercept"]
+            label = (f"UB fit  r={reg['r_value']:.3f}  "
+                    f"p={reg['p_value']:.3e}  "
+                    f"n={reg['n']}")
+            fig.add_scatter(x=x_line, y=y_line,
+                            mode="lines", name=label,
+                            line=dict(color="#f38ba8", width=2, dash="dash"))
         self._plotly_df = df.reset_index(drop=True)
         tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False)
         fig.write_html(tmp.name); webbrowser.open(f"file://{tmp.name}")
@@ -358,6 +519,7 @@ class SpectroViewer(tk.Tk):
 
     # ── Shared spectro display ────────────────────────────────────────────────
     def _show(self, ax, canvas, row, prefix=""):
+        self._current_row = row  # Store current row for potential future use (e.g., playback)
         try:
             S_db, times, freqs, f_min, f_max, t_min, t_max = load_spectrogram(row, self.config)
             mv = row.get(self.metric_col, float("nan"))
@@ -367,6 +529,86 @@ class SpectroViewer(tk.Tk):
             canvas.draw()
         except Exception as e:
             messagebox.showerror("Spectrogram Error", str(e))
+    
+    def _play_audio(self, row, mode="segment"):
+        """mode = 'segment' (full) or 'prediction' (box ± 10%)"""
+        try:
+            audio_path = os.path.join(self.config.audio_subdir, str(row["file_name_radical"]))
+            y, sr = librosa.load(audio_path, sr=None)
+
+            if mode == "prediction":
+                t_min = float(row.get("t_min", row.get("seg_start", 0)))
+                t_max = float(row.get("t_max", row.get("seg_end", librosa.get_duration(y=y, sr=sr))))
+                margin = (t_max - t_min) * 0.10
+                start = max(0, t_min - margin)
+                end   = min(librosa.get_duration(y=y, sr=sr), t_max + margin)
+            else:
+                start = float(row.get("seg_start", 0))
+                end   = float(row.get("seg_end",   librosa.get_duration(y=y, sr=sr)))
+
+            y_play = y[int(start * sr): int(end * sr)]
+            sd.stop()
+            sd.play(y_play, sr)
+        except Exception as e:
+            messagebox.showerror("Playback Error", str(e))
+
+    def _export_to_csv(self, row):
+        if not hasattr(self, "_export_path") or not self._export_path:
+            path = fd.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv")],
+                title="Choose or create export CSV"
+            )
+            if not path: return
+            self._export_path = path
+
+        row_df = pd.DataFrame([row])
+
+        if os.path.exists(self._export_path):
+            existing = pd.read_csv(self._export_path)
+            # Déduplication sur file_name_radical + segment_id
+            dup = (
+                (existing["file_name_radical"] == row["file_name_radical"]) &
+                (existing["segment_id"]        == row["segment_id"])
+            ).any()
+            if dup:
+                messagebox.showinfo("Duplicate", f"{row['file_name_radical']} seg {row['segment_id']} already exists.")
+                return
+            combined = pd.concat([existing, row_df], ignore_index=True)
+        else:
+            combined = row_df
+
+        combined.to_csv(self._export_path, index=False)
+        messagebox.showinfo("Exported", f"Added → {os.path.basename(self._export_path)}  ({len(combined)} lines)")
+
+    def _t2_load_csv(self):
+        path = fd.askopenfilename(filetypes=[("CSV files", "*.csv")], title="Load list CSV")
+        if not path: return
+
+        loaded = pd.read_csv(path)
+        # Joining on file_name_radical + segment_id to ensure we only show rows that have corresponding spectrograms in our main dataframe
+        merged = pd.merge(
+            loaded[["file_name_radical", "segment_id"]],
+            self.df,
+            on=["file_name_radical", "segment_id"],
+            how="inner"
+        )
+        if merged.empty:
+            messagebox.showwarning("No Match",
+                                "No rows in the CSV match the loaded dataframe.")
+            return
+
+        self.lst  = [r for _, r in merged.iterrows()]
+        self.lidx = 0
+        m = self.metric_col
+        labels = [
+            f"{r.get('file_name_radical','?')}_seg{r.get('segment_id','?')}  "
+            f"[{m}={r.get(m, float('nan')):.4f}]"
+            for r in self.lst
+        ]
+        self.jcb["values"] = labels
+        self.li_lbl.config(text=f"{len(self.lst)} items (from CSV)")
+        self._t2_show()
 
 
 # ─────────────────────────────────────────────
