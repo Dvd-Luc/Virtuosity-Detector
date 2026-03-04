@@ -143,6 +143,7 @@ class SpectroViewer(tk.Tk):
     def __init__(self, df, config, metric_col="confidence"):
         super().__init__()
         self.df, self.config, self.metric_col = df.copy(), config, metric_col
+        self._current_row = None
         self.title("Trill Spectrogram Viewer")
         self.geometry("1250x840")
         self.configure(bg=self.BG)
@@ -179,16 +180,16 @@ class SpectroViewer(tk.Tk):
                         fg=self.FG, bg=self.BG2, selectcolor=self.SURF,
                         activebackground=self.BG2).pack(side="left", padx=4)
             
-        tk.Label(h, text="Play:", fg=self.FG2, bg=self.BG2).pack(side="left", padx=(24, 4))
-        tk.Button(h, text="▶ Segment", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
-                command=lambda: self._play_audio(self._current_row, mode="segment")
-                ).pack(side="left", padx=2)
-        tk.Button(h, text="▶ Prediction ±10%", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
-                command=lambda: self._play_audio(self._current_row, mode="prediction")
-                ).pack(side="left", padx=2)
-        tk.Button(h, text="⏹", bg=self.SURF, fg=self.FG, relief="flat", padx=6,
-                command=sd.stop).pack(side="left", padx=2)
-        self._current_row = None 
+        # tk.Label(h, text="Play:", fg=self.FG2, bg=self.BG2).pack(side="left", padx=(24, 4))
+        # tk.Button(h, text="▶ Segment", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
+        #         command=lambda: self._play_audio(self._current_row, mode="segment")
+        #         ).pack(side="left", padx=2)
+        # tk.Button(h, text="▶ Prediction ±10%", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
+        #         command=lambda: self._play_audio(self._current_row, mode="prediction")
+        #         ).pack(side="left", padx=2)
+        # tk.Button(h, text="⏹", bg=self.SURF, fg=self.FG, relief="flat", padx=6,
+        #         command=sd.stop).pack(side="left", padx=2)
+        # self._current_row = None 
 
         tk.Label(h, text=f"{len(self.df)} samples", fg=self.GRN, bg=self.BG2,
                  font=("Helvetica", 9)).pack(side="right", padx=16)
@@ -222,7 +223,7 @@ class SpectroViewer(tk.Tk):
                            activebackground=self.BG).pack(side="left", padx=8)
         tk.Label(top, text="Value:", fg=self.FG2, bg=self.BG).pack(side="left", padx=(20, 4))
         self.tax_val = tk.StringVar()
-        self.tax_cb  = ttk.Combobox(top, textvariable=self.tax_val, width=28); self.tax_cb.pack(side="left")
+        self.tax_cb  = ttk.Combobox(top, textvariable=self.tax_val, width=40); self.tax_cb.pack(side="left")
         self.tax_cb.bind("<<ComboboxSelected>>", lambda _: self._opt1_update_stats())
 
         # Stats panel
@@ -247,6 +248,17 @@ class SpectroViewer(tk.Tk):
         self.ax1.set_facecolor(self.BG2)
         c = FigureCanvasTkAgg(self.fig1, master=self.t1); c.get_tk_widget().pack(fill="both", expand=True, padx=14, pady=6)
         self.c1 = c
+
+        play1 = tk.Frame(self.t1, bg=self.BG); play1.pack(pady=4)
+        tk.Button(play1, text="▶ Segment", bg=self.SURF, fg=self.FG, relief="flat", padx=10,
+                command=lambda: self._play_audio(self._current_row, mode="segment")
+                ).pack(side="left", padx=6)
+        tk.Button(play1, text="▶ Prediction ±10%", bg=self.SURF, fg=self.FG, relief="flat", padx=10,
+                command=lambda: self._play_audio(self._current_row, mode="prediction")
+                ).pack(side="left", padx=6)
+        # tk.Button(play1, text="⏹ Stop", bg=self.SURF, fg=self.FG, relief="flat", padx=10,
+        #         command=sd.stop).pack(side="left", padx=6)
+        
         self._opt1_load_values()
 
     def _opt1_load_values(self):
@@ -362,6 +374,16 @@ class SpectroViewer(tk.Tk):
         self.c2 = c; self.lst = []; self.lidx = 0
         self._t2_toggle()
 
+        play2 = tk.Frame(self.t2, bg=self.BG); play2.pack(pady=4)
+        tk.Button(play2, text="▶ Segment", bg=self.SURF, fg=self.FG, relief="flat", padx=10,
+                command=lambda: self._play_audio(self._current_row, mode="segment")
+                ).pack(side="left", padx=6)
+        tk.Button(play2, text="▶ Prediction ±10%", bg=self.SURF, fg=self.FG, relief="flat", padx=10,
+                command=lambda: self._play_audio(self._current_row, mode="prediction")
+                ).pack(side="left", padx=6)
+        # tk.Button(play2, text="⏹ Stop", bg=self.SURF, fg=self.FG, relief="flat", padx=10,
+        #         command=sd.stop).pack(side="left", padx=6)
+
     def _t2_toggle(self):
         if self.crit.get() == "top_n":
             self.tnf.pack(side="left", padx=10); self.thf.pack_forget()
@@ -414,7 +436,12 @@ class SpectroViewer(tk.Tk):
             tk.Label(ctrl, text=lbl, fg=self.FG2, bg=self.BG).pack(side="left", padx=(8, 2))
             v = tk.StringVar(value=default_fn())
             setattr(self, f"_{attr}", v)
-            vals = num_cols if attr in ("sx","sy","ss") else cat_cols
+            # vals = num_cols if attr in ("sx","sy","ss") else cat_cols # Only categorical for color, size can be numeric or categorical
+            if attr == "sc":
+                vals = [""] + list(self.df.columns) 
+            else:
+                vals = num_cols if attr in ("sx","sy") else [""] + num_cols
+
             if attr == "ss": vals = [""] + num_cols
             ttk.Combobox(ctrl, textvariable=v, values=vals, width=w).pack(side="left")
 
@@ -459,10 +486,28 @@ class SpectroViewer(tk.Tk):
         c = FigureCanvasTkAgg(self.fig3, master=self.t3); c.get_tk_widget().pack(fill="both", expand=True, padx=14, pady=6)
         self.c3 = c
 
+        play3 = tk.Frame(self.t3, bg=self.BG); play3.pack(pady=4)
+        tk.Button(play3, text="▶ Segment", bg=self.SURF, fg=self.FG, relief="flat", padx=10,
+                command=lambda: self._play_audio(self._current_row, mode="segment")
+                ).pack(side="left", padx=6)
+        tk.Button(play3, text="▶ Prediction ±10%", bg=self.SURF, fg=self.FG, relief="flat", padx=10,
+                command=lambda: self._play_audio(self._current_row, mode="prediction")
+                ).pack(side="left", padx=6)
+        # tk.Button(play3, text="⏹ Stop", bg=self.SURF, fg=self.FG, relief="flat", padx=10,
+        #         command=sd.stop).pack(side="left", padx=6)
+
     def _t3_plotly(self):
         x, y = self._sx.get(), self._sy.get()
         color = self._sc.get() or None
         size  = self._ss.get() or None
+
+        color_continuous = False
+
+        if color and color in self.df.columns:
+            if pd.api.types.is_numeric_dtype(self.df[color]):
+                color_continuous = True
+
+
         if x not in self.df.columns or y not in self.df.columns:
             messagebox.showerror("Error", f"Columns not found: {x}, {y}"); return
         df = self.df.dropna(subset=[x, y]).copy()
@@ -470,7 +515,11 @@ class SpectroViewer(tk.Tk):
         df["_label"] = df["file_name_radical"].astype(str) + "_seg" + df["segment_id"].astype(str)
         hover = [c for c in ["_label", "species", "genus", "family", self.metric_col]
                 if c in df.columns and c not in [x, y]]
-        fig = px.scatter(df, x=x, y=y, color=color, size=size,
+        fig = px.scatter(df, x=x, y=y,
+                        color=color, 
+                        color_continuous_scale="Viridis" if color_continuous else None,
+                        color_discrete_sequence=px.colors.qualitative.Pastel if not color_continuous else None,
+                        size=size,
                         hover_name="_idx",       
                         hover_data=hover,
                         template="plotly_dark", title=f"{y}  vs  {x}",
@@ -535,16 +584,20 @@ class SpectroViewer(tk.Tk):
         try:
             audio_path = os.path.join(self.config.audio_subdir, str(row["file_name_radical"]))
             y, sr = librosa.load(audio_path, sr=None)
+            duration = librosa.get_duration(y=y, sr=sr)
+
+            seg_start = row.get("seg_start", 0)
+            seg_end   = row.get("seg_end", duration)
 
             if mode == "prediction":
-                t_min = float(row.get("t_min", row.get("seg_start", 0)))
-                t_max = float(row.get("t_max", row.get("seg_end", librosa.get_duration(y=y, sr=sr))))
+                t_min = float(row.get("t_min", 0)) + seg_start
+                t_max = float(row.get("t_max", duration)) + seg_start
                 margin = (t_max - t_min) * 0.10
                 start = max(0, t_min - margin)
-                end   = min(librosa.get_duration(y=y, sr=sr), t_max + margin)
+                end   = min(duration, t_max + margin)
             else:
-                start = float(row.get("seg_start", 0))
-                end   = float(row.get("seg_end",   librosa.get_duration(y=y, sr=sr)))
+                start = seg_start
+                end   = seg_end
 
             y_play = y[int(start * sr): int(end * sr)]
             sd.stop()
