@@ -30,7 +30,7 @@ def upper_bound_regression(
     x_col="trill_rate",
     y_col="bandwidth",
     bin_width=2.0,
-    x_min=2,
+    x_min=None,
     x_max=None,
     log_y=False
 ):
@@ -63,10 +63,15 @@ def upper_bound_regression(
     """
 
     df = df[[x_col, y_col]].dropna()
+    if x_min is None:
+        x_min = df[x_col].min()
+        print(f"Inferred x_min from data: {x_min:.2f}")
     df = df[df[x_col] >= x_min]
 
     if x_max is None:
         x_max = df[x_col].max()
+        print(f"Inferred x_max from data: {x_max:.2f}")
+    df = df[df[x_col] <= x_max]
 
     # Define bins
     bins = np.arange(x_min, x_max + bin_width, bin_width)
@@ -148,6 +153,12 @@ class SpectroViewer(tk.Tk):
         self.geometry("1250x840")
         self.configure(bg=self.BG)
         self._style(); self._header(); self._notebook()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+    
+    def _on_close(self):
+        sd.stop()
+        self.destroy()
+        import sys; sys.exit(0)
 
     # ── Styling ──────────────────────────────────────────────────────────────
     def _style(self):
@@ -324,26 +335,32 @@ class SpectroViewer(tk.Tk):
     def _tab2(self):
         ctrl = tk.Frame(self.t2, bg=self.BG); ctrl.pack(fill="x", padx=14, pady=10)
         tk.Label(ctrl, text="Criterion:", fg=self.FG2, bg=self.BG).pack(side="left")
-        self.crit = tk.StringVar(value="top_n")
-        for v, t in [("top_n", "Top N highest"), ("threshold", "Threshold filter")]:
+        self.crit = tk.StringVar(value="top_n_high")
+        for v, t in [("top_n_high", "Top N highest"), ("top_n_low", "Top N lowest"), ("threshold", "Threshold filter")]:
             tk.Radiobutton(ctrl, text=t, variable=self.crit, value=v,
                            command=self._t2_toggle,
                            fg=self.FG, bg=self.BG, selectcolor=self.SURF,
                            activebackground=self.BG).pack(side="left", padx=8)
+
+        # Parameters frame (Top-N or Threshold depending on criterion)   
+        param_frame = tk.Frame(ctrl, bg=self.BG)
+        param_frame.pack(side="left", padx=10)
+
         # Top-N
-        self.tnf = tk.Frame(ctrl, bg=self.BG); self.tnf.pack(side="left", padx=10)
+        self.tnf = tk.Frame(param_frame, bg=self.BG); self.tnf.pack(side="left", padx=10)
         tk.Label(self.tnf, text="N:", fg=self.FG2, bg=self.BG).pack(side="left")
         self.nvar = tk.IntVar(value=10)
         tk.Spinbox(self.tnf, from_=1, to=1000, textvariable=self.nvar, width=5,
                    bg=self.SURF, fg=self.FG, insertbackground="white",
                    buttonbackground=self.SURF).pack(side="left")
         # Threshold
-        self.thf = tk.Frame(ctrl, bg=self.BG)
+        self.thf = tk.Frame(param_frame, bg=self.BG)
         self.opv = tk.StringVar(value=">")
         ttk.Combobox(self.thf, textvariable=self.opv, values=[">","<",">=","<="], width=4).pack(side="left")
         self.tv = tk.DoubleVar(value=0.5)
         tk.Entry(self.thf, textvariable=self.tv, width=8,
                  bg=self.SURF, fg=self.FG, insertbackground="white").pack(side="left", padx=4)
+        
         tk.Button(ctrl, text="Build List ▶", bg=self.ACC, fg=self.BG2,
                   font=("Helvetica", 9, "bold"), relief="flat", padx=10,
                   command=self._t2_build).pack(side="left", padx=14)
@@ -353,6 +370,7 @@ class SpectroViewer(tk.Tk):
         
         self.li_lbl = tk.Label(ctrl, text="No list yet", fg=self.FG2, bg=self.BG)
         self.li_lbl.pack(side="left")
+
         # Nav
         nav = tk.Frame(self.t2, bg=self.BG2, pady=6); nav.pack(fill="x", padx=14)
         bcfg = dict(bg=self.SURF, fg=self.FG, relief="flat", padx=14, pady=4,
@@ -360,14 +378,14 @@ class SpectroViewer(tk.Tk):
         tk.Button(nav, text="◀", command=self._t2_prev, **bcfg).pack(side="left", padx=4)
         tk.Button(nav, text="▶", command=self._t2_next, **bcfg).pack(side="left", padx=4)
         tk.Label(nav, text="Jump:", fg=self.FG2, bg=self.BG2).pack(side="left", padx=(16, 4))
-        tk.Button(nav, text="＋ Export row", bg=self.GRN, fg=self.BG2, relief="flat", padx=8,
-          command=lambda: self._export_to_csv(self.lst[self.lidx]) if self.lst else None
-          ).pack(side="left", padx=8)
         self.jv = tk.StringVar()
         self.jcb = ttk.Combobox(nav, textvariable=self.jv, width=50); self.jcb.pack(side="left")
         self.jcb.bind("<<ComboboxSelected>>", lambda _: self._t2_jump())
         self.nav_lbl = tk.Label(nav, text="", fg=self.ACC, bg=self.BG2, font=("Helvetica", 9))
         self.nav_lbl.pack(side="left", padx=10)
+        tk.Button(nav, text="＋ Export row", bg=self.GRN, fg=self.BG2, relief="flat", padx=8,
+          command=lambda: self._export_to_csv(self.lst[self.lidx]) if self.lst else None
+          ).pack(side="left", padx=8)
         self.fig2, self.ax2 = plt.subplots(figsize=(10, 3.4), facecolor=self.BG2)
         self.ax2.set_facecolor(self.BG2)
         c = FigureCanvasTkAgg(self.fig2, master=self.t2); c.get_tk_widget().pack(fill="both", expand=True, padx=14, pady=6)
@@ -385,15 +403,19 @@ class SpectroViewer(tk.Tk):
         #         command=sd.stop).pack(side="left", padx=6)
 
     def _t2_toggle(self):
-        if self.crit.get() == "top_n":
+        if self.crit.get() == "top_n_high":
+            self.tnf.pack(side="left", padx=10); self.thf.pack_forget()
+        elif self.crit.get() == "top_n_low":
             self.tnf.pack(side="left", padx=10); self.thf.pack_forget()
         else:
             self.thf.pack(side="left", padx=4); self.tnf.pack_forget()
 
     def _t2_build(self):
         m = self.metric_col; df = self.df.dropna(subset=[m])
-        if self.crit.get() == "top_n":
+        if self.crit.get() == "top_n_high":
             sub = df.nlargest(self.nvar.get(), m)
+        elif self.crit.get() == "top_n_low":
+            sub = df.nsmallest(self.nvar.get(), m)
         else:
             op = self.opv.get(); thr = self.tv.get()
             sub = df[{">": df[m]>thr,"<": df[m]<thr,">=": df[m]>=thr,"<=": df[m]<=thr}[op]]
@@ -430,7 +452,7 @@ class SpectroViewer(tk.Tk):
         for lbl, attr, default_fn, w in [
             ("X axis:",   "sx", lambda: next((c for c in num_cols if "rate" in c.lower() or "trill" in c.lower()), num_cols[0] if num_cols else ""), 18),
             ("Y axis:",   "sy", lambda: next((c for c in num_cols if "band" in c.lower() or "bw"   in c.lower()), num_cols[1] if len(num_cols)>1 else num_cols[0] if num_cols else ""), 18),
-            ("Color by:", "sc", lambda: next((c for c in ["species","genus","family"] if c in self.df.columns), ""), 16),
+            ("Color by:", "sc", lambda: "", 16),
             ("Size by:",  "ss", lambda: "", 16),
         ]:
             tk.Label(ctrl, text=lbl, fg=self.FG2, bg=self.BG).pack(side="left", padx=(8, 2))
@@ -454,8 +476,9 @@ class SpectroViewer(tk.Tk):
                     fg=self.FG, bg=self.BG, selectcolor=self.SURF,
                     activebackground=self.BG).pack(side="left", padx=8)
 
+        default_bin = 2.0
         tk.Label(ctrl, text="bin_width:", fg=self.FG2, bg=self.BG).pack(side="left", padx=(8,2))
-        self.ub_bin = tk.DoubleVar(value=2.0)
+        self.ub_bin = tk.DoubleVar(value=default_bin)
         tk.Entry(ctrl, textvariable=self.ub_bin, width=5,
                 bg=self.SURF, fg=self.FG, insertbackground="white").pack(side="left")
 
@@ -463,6 +486,10 @@ class SpectroViewer(tk.Tk):
         tk.Checkbutton(ctrl, text="log Y", variable=self.ub_logy,
                     fg=self.FG, bg=self.BG, selectcolor=self.SURF,
                     activebackground=self.BG).pack(side="left", padx=4)
+        
+        self.theme_var = tk.StringVar(value="dark")
+        tk.Label(ctrl, text="Theme:", fg=self.FG2, bg=self.BG).pack(side="left", padx=(16,2))
+        ttk.Combobox(ctrl, textvariable=self.theme_var, values=["dark", "light"], width=8).pack(side="left")
 
         tk.Label(self.t3,
                 text="Click 'Open Plotly →' → hover a point to get its index → enter it below.",
@@ -515,7 +542,12 @@ class SpectroViewer(tk.Tk):
         df["_label"] = df["file_name_radical"].astype(str) + "_seg" + df["segment_id"].astype(str)
         hover = [c for c in ["_label", "species", "genus", "family", self.metric_col]
                 if c in df.columns and c not in [x, y]]
-        fig = px.scatter(df, x=x, y=y,
+        
+        
+        if self.theme_var.get() == "dark":
+            fig = px.scatter(df, 
+                        x=x, 
+                        y=y,
                         color=color, 
                         color_continuous_scale="Viridis" if color_continuous else None,
                         color_discrete_sequence=px.colors.qualitative.Pastel if not color_continuous else None,
@@ -524,10 +556,38 @@ class SpectroViewer(tk.Tk):
                         hover_data=hover,
                         template="plotly_dark", title=f"{y}  vs  {x}",
                         labels={x: x.replace("_"," ").title(), y: y.replace("_"," ").title()},
-                        opacity=0.75)
-        fig.update_traces(marker=dict(size=9 if not size else None, line=dict(width=0)))
-        fig.update_layout(paper_bgcolor="#1e1e2e", plot_bgcolor="#181825",
-                        hoverlabel=dict(bgcolor="#313244", font_color="#cdd6f4"))
+                        opacity=0.5,
+                        log_y=self.ub_logy.get())
+            fig.update_traces(marker=dict(size=6 if not size else None, line=dict(width=0)))
+            fig.update_layout(paper_bgcolor="#1e1e2e", plot_bgcolor="#181825",
+                            hoverlabel=dict(bgcolor="#313244", font_color="#cdd6f4"))
+        
+        else :
+            fig = px.scatter(df,
+                    x=x,
+                    y=y,
+                    color=color,
+                    color_continuous_scale="Viridis" if color_continuous else None,
+                    color_discrete_sequence=px.colors.qualitative.Set2 if not color_continuous else None,
+                    size=size,
+                    hover_name="_idx",
+                    hover_data=hover,
+                    template="plotly_white", title=f"{y}  vs  {x}",
+                    labels={x: x.replace("_"," ").title(), y: y.replace("_"," ").title()},
+                    opacity=0.7,
+                    log_y=self.ub_logy.get())
+            fig.update_traces(marker=dict(size=6 if not size else None,
+                                        line=dict(width=0.5, color="#ffffff")))
+            fig.update_layout(
+                paper_bgcolor="#d9d2d2",   # gris très clair pour le fond extérieur
+                plot_bgcolor="#d9d2d2",    # blanc pur pour la zone du graphe
+                font=dict(color="#333333"),
+                title_font=dict(color="#1a1a2e"),
+                hoverlabel=dict(bgcolor="#e8e8f0", font_color="#1a1a2e",
+                                bordercolor="#aaaacc"),
+            )
+            fig.update_xaxes(gridcolor="#AAA5A5", zerolinecolor="#585353")
+            fig.update_yaxes(gridcolor="#AAA5A5", zerolinecolor="#585353")
         
         # Upper bound regression (max per bin + linear fit)
         if self.ub_var.get():
@@ -539,7 +599,10 @@ class SpectroViewer(tk.Tk):
             # Points des maxima par bin
             fig.add_scatter(x=ub_df[x], y=ub_df[y],
                             mode="markers", name="UB points",
-                            marker=dict(color="#f38ba8", size=10, symbol="diamond"))
+                            marker=dict(color="#f38ba8", size=10, symbol="diamond"),
+                            hoverinfo="skip",
+                            hovertemplate=None,
+                            showlegend=True)
             # Droite de régression
             x_line = np.linspace(df[x].min(), df[x].max(), 200)
             if self.ub_logy.get():
@@ -554,7 +617,37 @@ class SpectroViewer(tk.Tk):
                             line=dict(color="#f38ba8", width=2, dash="dash"))
         self._plotly_df = df.reset_index(drop=True)
         tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False)
-        fig.write_html(tmp.name); webbrowser.open(f"file://{tmp.name}")
+        html = fig.to_html(include_plotlyjs="cdn")
+
+        # Injection du JS de copie au clic
+        copy_js = """
+        <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            var plot = document.querySelector(".plotly-graph-div");
+            plot.on("plotly_click", function(data) {
+                var idx = data.points[0].hovertext;   // hovertext = hover_name = _idx
+                navigator.clipboard.writeText(String(idx)).then(function() {
+                    // Feedback visuel : petit toast
+                    var toast = document.createElement("div");
+                    toast.textContent = "Index " + idx + " copied!";
+                    toast.style.cssText = "position:fixed;bottom:30px;left:50%;transform:translateX(-50%);"
+                        + "background:#89b4fa;color:#1e1e2e;padding:8px 20px;border-radius:8px;"
+                        + "font-family:Helvetica;font-size:14px;font-weight:bold;z-index:9999;"
+                        + "opacity:1;transition:opacity 1s;";
+                    document.body.appendChild(toast);
+                    setTimeout(function(){ toast.style.opacity="0"; }, 1500);
+                    setTimeout(function(){ toast.remove(); }, 2500);
+                });
+            });
+        });
+        </script>
+        """
+
+        html = html + copy_js
+
+        with open(tmp.name, "w", encoding="utf-8") as f:
+            f.write(html)
+        webbrowser.open(f"file://{tmp.name}")
 
     def _t3_show(self):
         idx = self.pick_idx.get()
@@ -656,7 +749,7 @@ class SpectroViewer(tk.Tk):
         m = self.metric_col
         labels = [
             f"{r.get('file_name_radical','?')}_seg{r.get('segment_id','?')}  "
-            f"[{m}={r.get(m, float('nan')):.4f}]"
+            f"[{m}={r.get(m, float('nan')):.4f}]" # Display metric value in label for easier identification in the list
             for r in self.lst
         ]
         self.jcb["values"] = labels
