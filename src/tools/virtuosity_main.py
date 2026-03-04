@@ -13,6 +13,7 @@ from plotly.subplots import make_subplots
 from src.config import load_config_yaml
 from src.main import visualize_and_confirm_predictions
 from src.utils.gui_visualizer import launch_gui
+from src.utils.metrics import upper_bound_regression, distance_to_upper_bound
 
 def visualize_best_virtuosity_samples(df, config, x_col="trill_rate", y_col="bandwidth", sorting_metric="dist_to_bound", bin_width=2.0, top_n=5, plot=False):
     df_plot = df.dropna(subset=[sorting_metric])
@@ -29,18 +30,18 @@ def visualize_best_virtuosity_samples(df, config, x_col="trill_rate", y_col="ban
     )
 
     if plot:
-        plot_virtuosity(best_samples, x_col=x_col, y_col=y_col, logy=False, upper_bound=None, reg=None)
+        plot_virtuosity(best_samples, x_col=x_col, y_col=y_col, logy=False, show_upper_bound=False)
 
     visualize_and_confirm_predictions(config, df_predictions=best_samples)
-    
-def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_col=None, upper_bound=None, reg=None):
+
+def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_col=None, show_upper_bound=False, upper_bound=None, reg=None):
     df_plot = df.dropna(subset=[x_col, y_col])
     df_plot = df_plot[df_plot[x_col] >= 2]
 
     if logy:
         df_plot["log_bandwidth"] = np.log(df_plot[y_col] + 1e-6)
-        y_col = "log_bandwidth"
         ylabel = f'log({y_col}) (log(Hz))'
+        y_col = "log_bandwidth"
         title = f'log({y_col}) vs {x_col}'
     else:
         ylabel = f'{y_col} (Hz)'
@@ -68,20 +69,29 @@ def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_c
             title=title,
         )
 
-    if upper_bound is not None and reg is not None:
+    if show_upper_bound :
+        ub, reg = upper_bound_regression(
+            df_plot,
+            x_col=x_col,
+            y_col=y_col,
+            log_y=logy)
 
         fig.add_trace(
             go.Scatter(
-                x=upper_bound[x_col],
-                y=upper_bound[y_col],
+                x=ub[x_col],
+                y=ub[y_col],
                 mode="markers",
                 marker=dict(color="red", size=8),
                 name="Upper bound points",
             )
         )
 
-        x_line = np.linspace(upper_bound[x_col].min(), upper_bound[x_col].max(), 200)
-        y_line = reg["intercept"] + reg["slope"] * x_line
+        x_line = np.linspace(ub[x_col].min(), ub[x_col].max(), 200)
+        if logy:
+            y_line = np.exp(reg["intercept"] + reg["slope"] * x_line)
+        else:
+            y_line = reg["intercept"] + reg["slope"] * x_line
+
         fig.add_trace(
             go.Scatter(
                 x=x_line,
@@ -153,122 +163,6 @@ def plot_dist_vs_traits_plotly(df, hue_col, title_suffix):
 
     fig.show()
 
-
-def upper_bound_regression(
-    df,
-    x_col="trill_rate",
-    y_col="bandwidth",
-    bin_width=2.0,
-    x_min=2,
-    x_max=None,
-    log_y=False
-):
-    """
-    Compute an upper-bound regression using binned maxima (Podos-style).
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input dataframe
-    x_col : str
-        X variable (e.g. trill_rate)
-    y_col : str
-        Y variable (e.g. bandwidth)
-    bin_width : float
-        Bin width in X units (Hz)
-    x_min : float
-        Minimum X to consider
-    x_max : float or None
-        Maximum X to consider (None = inferred from data)
-    log_y : bool
-        Whether to log-transform Y before regression
-
-    Returns
-    -------
-    ub_df : pd.DataFrame
-        Upper-bound points (bin_center, x, y)
-    reg : dict
-        Regression results (slope, intercept, r, p, stderr)
-    """
-
-    df = df[[x_col, y_col]].dropna()
-    df = df[df[x_col] >= x_min]
-
-    if x_max is None:
-        x_max = df[x_col].max()
-
-    # Define bins
-    bins = np.arange(x_min, x_max + bin_width, bin_width)
-    df["bin"] = pd.cut(df[x_col], bins=bins, include_lowest=True)
-
-    # Select max Y per bin
-    ub = (
-        df.loc[df.groupby("bin")[y_col].idxmax()]
-        .sort_values(x_col)
-        .copy()
-    )
-
-    if log_y:
-        ub["y_reg"] = np.log(ub[y_col] + 1e-9)
-    else:
-        ub["y_reg"] = ub[y_col]
-
-    # Regression
-    res = linregress(ub[x_col], ub["y_reg"])
-
-    reg = {
-        "slope": res.slope,
-        "intercept": res.intercept,
-        "r_value": res.rvalue,
-        "p_value": res.pvalue,
-        "stderr": res.stderr,
-        "n": len(ub)
-    }
-
-    return ub, reg
-
-def distance_to_upper_bound(
-    df,
-    reg,
-    x_col="trill_rate",
-    y_col="bandwidth",
-    signed=False
-):
-    """
-    Compute Euclidean distance from each point to the upper-bound regression.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input dataframe with trill_rate and bandwidth
-    reg : dict
-        Regression output from upper_bound_regression()
-    x_col : str
-        X variable name
-    y_col : str
-        Y variable name
-    signed : bool
-        If True, distances are signed (negative = below the bound)
-
-    Returns
-    -------
-    distances : np.ndarray
-        Distance for each row (same order as df)
-    """
-
-    a = reg["slope"]
-    b = reg["intercept"]
-
-    x = df[x_col].values
-    y = df[y_col].values
-
-    # Distance formula
-    d = (a * x - y + b) / np.sqrt(a**2 + 1)
-
-    if signed:
-        return d
-    else:
-        return np.abs(d)
     
 def prepare_dataset(df):
     df["file_name"] = df.apply(
@@ -397,19 +291,16 @@ def main():
         ub_df = regression_results["ub_df"]
         reg = regression_results["reg"]
         show_bound = False
+        use_podos = False
 
         input_log_y = input("Log-transform bandwidth for plotting? (y/n): ").strip().lower()
         log_y = input_log_y == "y"
 
-        if not log_y:
-            input_use_podos = input("Use Podos bandwidth for plotting? (y/n): ").strip().lower()
-            use_podos = input_use_podos == "y"
-            if use_podos:
-                ub_df = regression_results["ub_df_podos"]
-                reg = regression_results["reg_podos"]
+        input_use_podos = input("Use Podos bandwidth for plotting? (y/n): ").strip().lower()
+        use_podos = input_use_podos == "y"
 
-            input_show_bound = input("Show upper bound regression on plot? (y/n): ").strip().lower()
-            show_bound = input_show_bound == "y"
+        input_show_bound = input("Show upper bound regression on plot? (y/n): ").strip().lower()
+        show_bound = input_show_bound == "y"
 
         plot_virtuosity(
             df_merged,
@@ -417,8 +308,7 @@ def main():
             y_col="bandwidth" if not use_podos else "bandwidth_podos",
             logy=log_y,
             # hue_col="logmass",
-            upper_bound=ub_df if show_bound else None,
-            reg=reg if show_bound else None
+            show_upper_bound=show_bound,
         )
     
     elif choice == "2":
