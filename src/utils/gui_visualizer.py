@@ -19,7 +19,8 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import plotly.express as px
-from scipy.stats import linregress
+import plotly.graph_objects as go
+from scipy.stats import linregress, pearsonr, spearmanr
 from src.utils.metrics import upper_bound_regression
 
 
@@ -135,10 +136,12 @@ class SpectroViewer(tk.Tk):
         self.t1 = tk.Frame(self.nb, bg=self.BG)
         self.t2 = tk.Frame(self.nb, bg=self.BG)
         self.t3 = tk.Frame(self.nb, bg=self.BG)
+        self.t4 = tk.Frame(self.nb, bg=self.BG)
         self.nb.add(self.t1, text="Taxonomy Filter")
         self.nb.add(self.t2, text="Metric Lists")
         self.nb.add(self.t3, text="Scatter Plot")
-        self._tab1(); self._tab2(); self._tab3()
+        self.nb.add(self.t4, text="Correlations & Stats")
+        self._tab1(); self._tab2(); self._tab3(); self._tab4()
 
     # ════════════════════════════════════════════
     # TAB 1
@@ -606,6 +609,388 @@ class SpectroViewer(tk.Tk):
             # messagebox.showwarning("Index invalide", f"Index {idx} hors bornes (0–{len(source)-1})")
             messagebox.showwarning("Invalid Index", f"Index {idx} out of bounds (0–{len(source)-1})")
 
+    def _tab4(self):
+        num_cols = [c for c in self.df.select_dtypes(include=np.number).columns]
+        tax_cols = [c for c in ["species", "gen", "family"] if c in self.df.columns]
+
+        # Trois colonnes côte à côte
+        cols_frame = tk.Frame(self.t4, bg=self.BG)
+        cols_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        cols_frame.columnconfigure(0, weight=1)
+        cols_frame.columnconfigure(1, weight=1)
+        cols_frame.columnconfigure(2, weight=1)
+
+        col1 = tk.Frame(cols_frame, bg=self.BG2, padx=10, pady=10)
+        col2 = tk.Frame(cols_frame, bg=self.BG2, padx=10, pady=10)
+        col3 = tk.Frame(cols_frame, bg=self.BG2, padx=10, pady=10)
+        col1.grid(row=0, column=0, sticky="nsew", padx=6)
+        col2.grid(row=0, column=1, sticky="nsew", padx=6)
+        col3.grid(row=0, column=2, sticky="nsew", padx=6)
+
+        self._build_t4_bivariate(col1, num_cols, tax_cols)
+        self._build_t4_corrmatrix(col2, num_cols)
+        self._build_t4_distributions(col3, num_cols, tax_cols)
+
+
+    def _t4_section_title(self, parent, text):
+        tk.Label(parent, text=text, fg=self.ACC, bg=self.BG2,
+                font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(0, 6))
+        tk.Frame(parent, bg=self.SURF, height=1).pack(fill="x", pady=(0, 10))
+
+
+    def _t4_lbl(self, parent, text):
+        tk.Label(parent, text=text, fg=self.FG2, bg=self.BG2,
+                font=("Helvetica", 9)).pack(anchor="w", pady=(6, 1))
+
+
+    def _t4_cb(self, parent, var, values, width=18):
+        ttk.Combobox(parent, textvariable=var, values=values,
+                    width=width).pack(fill="x", pady=2)
+
+
+    def _t4_check(self, parent, text, var):
+        tk.Checkbutton(parent, text=text, variable=var,
+                    fg=self.FG, bg=self.BG2, selectcolor=self.SURF,
+                    activebackground=self.BG2).pack(anchor="w")
+
+
+    # ── Section 1 : Corrélation bivariée ────────────────────────────────────────
+    def _build_t4_bivariate(self, parent, num_cols, tax_cols):
+        self._t4_section_title(parent, "① Bivariate Correlation")
+
+        self._t4_lbl(parent, "X axis")
+        self.bv_x = tk.StringVar(value=num_cols[0] if num_cols else "")
+        self._t4_cb(parent, self.bv_x, num_cols)
+
+        self._t4_lbl(parent, "Y axis")
+        self.bv_y = tk.StringVar(value=num_cols[1] if len(num_cols) > 1 else "")
+        self._t4_cb(parent, self.bv_y, num_cols)
+
+        self._t4_lbl(parent, "Filter by")
+        self.bv_tax_col = tk.StringVar(value="")
+        self._t4_cb(parent, self.bv_tax_col, [""] + tax_cols)
+
+        self._t4_lbl(parent, "Filter value")
+        self.bv_tax_val = tk.StringVar(value="")
+        self.bv_tax_cb  = ttk.Combobox(parent, textvariable=self.bv_tax_val, width=18)
+        self.bv_tax_cb.pack(fill="x", pady=2)
+        self.bv_tax_col.trace_add("write", lambda *_: self._t4_update_tax_values(
+            self.bv_tax_col, self.bv_tax_cb))
+
+        self._t4_lbl(parent, "Color by")
+        self.bv_color = tk.StringVar(value="")
+        self._t4_cb(parent, self.bv_color, [""] + tax_cols + num_cols)
+
+        self._t4_lbl(parent, "Options")
+        self.bv_logx = tk.BooleanVar(value=False)
+        self.bv_logy = tk.BooleanVar(value=False)
+        self.bv_ols  = tk.BooleanVar(value=True)
+        self._t4_check(parent, "log X",        self.bv_logx)
+        self._t4_check(parent, "log Y",        self.bv_logy)
+        self._t4_check(parent, "Show OLS fit", self.bv_ols)
+
+        self._t4_lbl(parent, "Theme")
+        self.bv_theme = tk.StringVar(value="dark")
+        self._t4_cb(parent, self.bv_theme, ["dark", "light"], width=10)
+
+        tk.Button(parent, text="Open Plot →", bg=self.ACC, fg=self.BG2,
+                font=("Helvetica", 9, "bold"), relief="flat", pady=6,
+                command=self._t4_bivariate).pack(fill="x", pady=(16, 4))
+
+
+    def _t4_update_tax_values(self, tax_col_var, tax_val_cb):
+        col = tax_col_var.get()
+        if col and col in self.df.columns:
+            vals = [""] + sorted(self.df[col].dropna().unique().tolist())
+            tax_val_cb["values"] = vals
+            tax_val_cb.set("")
+
+
+    def _t4_bivariate(self):
+
+        x_col = self.bv_x.get(); y_col = self.bv_y.get()
+        if x_col not in self.df.columns or y_col not in self.df.columns:
+            messagebox.showerror("Error", f"Columns not found: {x_col}, {y_col}"); return
+
+        df = self.df[[x_col, y_col] + (
+            [self.bv_tax_col.get()] if self.bv_tax_col.get() in self.df.columns else []
+        ) + (
+            [self.bv_color.get()] if self.bv_color.get() in self.df.columns else []
+        )].dropna(subset=[x_col, y_col]).copy()
+
+        # Filtre taxon
+        tax_col = self.bv_tax_col.get(); tax_val = self.bv_tax_val.get()
+        if tax_col and tax_val and tax_col in df.columns:
+            df = df[df[tax_col] == tax_val]
+
+        if len(df) < 3:
+            messagebox.showwarning("Not enough data", f"Only {len(df)} points."); return
+
+        x = np.log(df[x_col].values + 1e-9) if self.bv_logx.get() else df[x_col].values
+        y = np.log(df[y_col].values + 1e-9) if self.bv_logy.get() else df[y_col].values
+
+        r_p, p_p = pearsonr(x, y)
+        r_s, p_s = spearmanr(x, y)
+        res      = linregress(x, y)
+
+        color_col = self.bv_color.get() or None
+        dark      = self.bv_theme.get() == "dark"
+        template  = "plotly_dark" if dark else "plotly_white"
+        paper_bg  = "#1e1e2e"     if dark else "#f5f5f5"
+        plot_bg   = "#181825"     if dark else "#ffffff"
+
+        color_continuous = color_col and color_col in self.df.columns and \
+                        pd.api.types.is_numeric_dtype(self.df[color_col])
+
+        xlabel = f"log({x_col})" if self.bv_logx.get() else x_col
+        ylabel = f"log({y_col})" if self.bv_logy.get() else y_col
+
+        fig = px.scatter(df, x=x_col, y=y_col,
+                        color=color_col,
+                        color_continuous_scale="Viridis" if color_continuous else None,
+                        color_discrete_sequence=px.colors.qualitative.Pastel if not color_continuous else None,
+                        log_x=self.bv_logx.get(), log_y=self.bv_logy.get(),
+                        template=template, opacity=0.6,
+                        labels={x_col: xlabel, y_col: ylabel},
+                        title=(f"{ylabel} vs {xlabel}"
+                                + (f"  [{tax_col}={tax_val}]" if tax_col and tax_val else "")
+                                + f"<br><sup>Pearson r={r_p:.4f} (p={p_p:.2e})  "
+                                f"Spearman ρ={r_s:.4f} (p={p_s:.2e})  n={len(df)}</sup>"))
+
+        if self.bv_ols.get():
+            x_line = np.linspace(x.min(), x.max(), 200)
+            y_line = res.slope * x_line + res.intercept
+            x_plot = np.exp(x_line) if self.bv_logx.get() else x_line
+            y_plot = np.exp(y_line) if self.bv_logy.get() else y_line
+            fig.add_scatter(x=x_plot, y=y_plot, mode="lines",
+                            name=f"OLS  y={res.slope:.3f}x+{res.intercept:.3f}",
+                            line=dict(color="#f38ba8", width=2, dash="dash"),
+                            hoverinfo="skip")
+
+        fig.update_layout(paper_bgcolor=paper_bg, plot_bgcolor=plot_bg)
+        self._t4_open_html(fig)
+
+
+    # ── Section 2 : Matrice de corrélation ──────────────────────────────────────
+    def _build_t4_corrmatrix(self, parent, num_cols):
+        self._t4_section_title(parent, "② Correlation Matrix")
+
+        self._t4_lbl(parent, "Method")
+        self.cm_method = tk.StringVar(value="pearson")
+        self._t4_cb(parent, self.cm_method, ["pearson", "spearman"], width=12)
+
+        self._t4_lbl(parent, "Color scale")
+        self.cm_cscale = tk.StringVar(value="RdBu_r")
+        self._t4_cb(parent, self.cm_cscale, ["RdBu_r", "Viridis", "Plasma", "RdYlGn"], width=12)
+
+        self._t4_lbl(parent, "Options")
+        self.cm_mask  = tk.BooleanVar(value=True)
+        self.cm_annot = tk.BooleanVar(value=True)
+        self._t4_check(parent, "Triangle only", self.cm_mask)
+        self._t4_check(parent, "Annotate",      self.cm_annot)
+
+        self._t4_lbl(parent, "Theme")
+        self.cm_theme = tk.StringVar(value="dark")
+        self._t4_cb(parent, self.cm_theme, ["dark", "light"], width=10)
+
+        self._t4_lbl(parent, "Select columns (Ctrl+click)")
+
+        lb_frame = tk.Frame(parent, bg=self.BG2)
+        lb_frame.pack(fill="x", pady=4)
+
+        self.cm_listbox = tk.Listbox(
+            lb_frame,
+            selectmode="multiple",
+            height=6,
+            bg=self.SURF, fg=self.FG,
+            selectbackground=self.ACC,
+            selectforeground=self.BG2,
+            exportselection=False,
+        )
+        lb_scroll = ttk.Scrollbar(lb_frame, orient="vertical",
+                                command=self._cm_listbox_scroll)
+        lb_scroll.pack(side="right", fill="y")
+        self.cm_listbox.pack(side="left", fill="x", expand=True)
+        self.cm_listbox.configure(yscrollcommand=lb_scroll.set)
+
+        for col in num_cols:
+            self.cm_listbox.insert("end", col)
+        # Rien sélectionné par défaut
+
+        tk.Button(parent, text="Open Matrix →", bg=self.ACC, fg=self.BG2,
+                font=("Helvetica", 9, "bold"), relief="flat", pady=6,
+                command=self._t4_corrmatrix).pack(fill="x", pady=(16, 4))
+
+
+    def _t4_corrmatrix(self):
+
+        selected = [self.cm_listbox.get(i) for i in self.cm_listbox.curselection()]
+        if len(selected) < 2:
+            messagebox.showwarning("Selection", "Select at least 2 columns."); return
+
+        corr  = self.df[selected].dropna().corr(method=self.cm_method.get())
+        vals  = corr.values.copy()
+        dark  = self.cm_theme.get() == "dark"
+
+        # Masque triangle supérieur
+        if self.cm_mask.get():
+            for i in range(len(selected)):
+                for j in range(i + 1, len(selected)):
+                    vals[i, j] = None
+
+        text = [[f"{vals[i,j]:.2f}" if vals[i,j] is not None else ""
+                for j in range(len(selected))]
+                for i in range(len(selected))] if self.cm_annot.get() else None
+
+        fig = go.Figure(go.Heatmap(
+            z=vals, x=selected, y=selected,
+            text=text, texttemplate="%{text}",
+            colorscale=self.cm_cscale.get(),
+            zmin=-1, zmax=1,
+            colorbar=dict(tickfont=dict(color="#cdd6f4" if dark else "#333")),
+            hovertemplate="%{y} × %{x}: %{z:.3f}<extra></extra>"
+        ))
+
+        fig.update_layout(
+            title=f"{self.cm_method.get().capitalize()} Correlation Matrix",
+            template="plotly_dark" if dark else "plotly_white",
+            paper_bgcolor="#1e1e2e" if dark else "#f5f5f5",
+            plot_bgcolor="#181825"  if dark else "#ffffff",
+            xaxis=dict(tickangle=-45),
+            yaxis=dict(autorange="reversed"),
+            font=dict(color="#cdd6f4" if dark else "#333")
+        )
+        self._t4_open_html(fig)
+
+
+    # ── Section 3 : Distributions ───────────────────────────────────────────────
+    def _build_t4_distributions(self, parent, num_cols, tax_cols):
+        self._t4_section_title(parent, "③ Distributions")
+
+        self._t4_lbl(parent, "Column")
+        self.dist_col = tk.StringVar(value=num_cols[0] if num_cols else "")
+        self._t4_cb(parent, self.dist_col, num_cols)
+
+        self._t4_lbl(parent, "Group by")
+        self.dist_grp = tk.StringVar(value="")
+        self._t4_cb(parent, self.dist_grp, [""] + tax_cols)
+
+        self._t4_lbl(parent, "Plot type")
+        self.dist_type = tk.StringVar(value="histogram + KDE")
+        self._t4_cb(parent, self.dist_type,
+                    ["histogram + KDE", "histogram", "KDE only", "box", "violin"])
+
+        self._t4_lbl(parent, "Bins (histogram)")
+        self.dist_bins = tk.IntVar(value=30)
+        tk.Spinbox(parent, from_=5, to=200, textvariable=self.dist_bins, width=6,
+                bg=self.SURF, fg=self.FG, insertbackground="white",
+                buttonbackground=self.SURF).pack(anchor="w", pady=2)
+
+        self._t4_lbl(parent, "Options")
+        self.dist_logx   = tk.BooleanVar(value=False)
+        self.dist_overlay = tk.BooleanVar(value=True)
+        self._t4_check(parent, "log X",            self.dist_logx)
+        self._t4_check(parent, "Overlay groups",   self.dist_overlay)
+
+        self._t4_lbl(parent, "Theme")
+        self.dist_theme = tk.StringVar(value="dark")
+        self._t4_cb(parent, self.dist_theme, ["dark", "light"], width=10)
+
+        tk.Button(parent, text="Open Distribution →", bg=self.ACC, fg=self.BG2,
+                font=("Helvetica", 9, "bold"), relief="flat", pady=6,
+                command=self._t4_distributions).pack(fill="x", pady=(16, 4))
+
+
+    def _t4_distributions(self):
+        col     = self.dist_col.get()
+        grp_col = self.dist_grp.get() or None
+        ptype   = self.dist_type.get()
+        dark    = self.dist_theme.get() == "dark"
+
+        if col not in self.df.columns:
+            messagebox.showerror("Error", f"Column not found: {col}"); return
+
+        df = self.df[[col] + ([grp_col] if grp_col else [])].dropna(subset=[col]).copy()
+        if self.dist_logx.get():
+            df = df[df[col] > 0]
+            df[col] = np.log(df[col])
+
+        xlabel   = f"log({col})" if self.dist_logx.get() else col
+        template = "plotly_dark" if dark else "plotly_white"
+        paper_bg = "#1e1e2e"     if dark else "#f5f5f5"
+        plot_bg  = "#181825"     if dark else "#ffffff"
+        barmode  = "overlay"     if self.dist_overlay.get() else "group"
+
+        if ptype in ("histogram + KDE", "histogram"):
+            fig = px.histogram(df, x=col, color=grp_col,
+                            nbins=self.dist_bins.get(),
+                            barmode=barmode, opacity=0.6,
+                            histnorm="probability density",
+                            template=template,
+                            labels={col: xlabel},
+                            title=f"Distribution of {xlabel}"
+                            + (f" by {grp_col}" if grp_col else ""),
+                            color_discrete_sequence=px.colors.qualitative.Pastel)
+
+            if ptype == "histogram + KDE":
+                from scipy.stats import gaussian_kde
+                groups = df[grp_col].unique() if grp_col else [None]
+                palette = px.colors.qualitative.Pastel
+                for i, grp in enumerate(groups):
+                    sub  = df[df[grp_col] == grp][col].dropna() if grp else df[col].dropna()
+                    vals = sub.values
+                    if len(vals) < 2: continue
+                    try:
+                        kde = gaussian_kde(vals)
+                        xs  = np.linspace(vals.min(), vals.max(), 300)
+                        fig.add_scatter(x=xs, y=kde(xs), mode="lines",
+                                        name=f"KDE {grp or col}",
+                                        line=dict(width=2, color=palette[i % len(palette)]),
+                                        hoverinfo="skip")
+                    except Exception:
+                        pass
+
+        elif ptype == "KDE only":
+            from scipy.stats import gaussian_kde
+            fig = go.Figure()
+            groups  = df[grp_col].unique() if grp_col else [None]
+            palette = px.colors.qualitative.Pastel
+            for i, grp in enumerate(groups):
+                sub  = df[df[grp_col] == grp][col].dropna() if grp else df[col].dropna()
+                vals = sub.values
+                if len(vals) < 2: continue
+                kde = gaussian_kde(vals)
+                xs  = np.linspace(vals.min(), vals.max(), 300)
+                fig.add_scatter(x=xs, y=kde(xs), mode="lines",
+                                name=str(grp) if grp else col,
+                                line=dict(width=2, color=palette[i % len(palette)]))
+            fig.update_layout(template=template,
+                            title=f"KDE of {xlabel}" + (f" by {grp_col}" if grp_col else ""),
+                            xaxis_title=xlabel, yaxis_title="Density")
+
+        elif ptype == "box":
+            fig = px.box(df, x=grp_col, y=col, color=grp_col,
+                        template=template, labels={col: xlabel},
+                        title=f"Box plot of {xlabel}" + (f" by {grp_col}" if grp_col else ""),
+                        color_discrete_sequence=px.colors.qualitative.Pastel)
+
+        elif ptype == "violin":
+            fig = px.violin(df, x=grp_col, y=col, color=grp_col,
+                            box=True, points="outliers",
+                            template=template, labels={col: xlabel},
+                            title=f"Violin plot of {xlabel}" + (f" by {grp_col}" if grp_col else ""),
+                            color_discrete_sequence=px.colors.qualitative.Pastel)
+
+        fig.update_layout(paper_bgcolor=paper_bg, plot_bgcolor=plot_bg)
+        self._t4_open_html(fig)
+
+
+    # ── Helper commun : ouvre un HTML plotly dans le navigateur ─────────────────
+    def _t4_open_html(self, fig):
+        tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False)
+        fig.write_html(tmp.name)
+        webbrowser.open(f"file://{tmp.name}")
+
     # ── Shared spectro display ────────────────────────────────────────────────
     def _show(self, ax, canvas, row, prefix=""):
         self._current_row = row  # Store current row for potential future use (e.g., playback)
@@ -674,35 +1059,6 @@ class SpectroViewer(tk.Tk):
         combined.to_csv(self._export_path, index=False)
         messagebox.showinfo("Exported", f"Added → {os.path.basename(self._export_path)}  ({len(combined)} lines)")
 
-    # def _t2_load_csv(self):
-    #     path = fd.askopenfilename(filetypes=[("CSV files", "*.csv")], title="Load list CSV")
-    #     if not path: return
-
-    #     loaded = pd.read_csv(path)
-    #     # Joining on file_name_radical + segment_id to ensure we only show rows that have corresponding spectrograms in our main dataframe
-    #     merged = pd.merge(
-    #         loaded[["file_name_radical", "segment_id"]],
-    #         self.df,
-    #         on=["file_name_radical", "segment_id"],
-    #         how="inner"
-    #     )
-    #     if merged.empty:
-    #         messagebox.showwarning("No Match",
-    #                             "No rows in the CSV match the loaded dataframe.")
-    #         return
-
-    #     self.lst  = [r for _, r in merged.iterrows()]
-    #     self.lidx = 0
-    #     m = self.metric_col
-    #     labels = [
-    #         f"{r.get('file_name_radical','?')}_seg{r.get('segment_id','?')}  "
-    #         f"[{m}={r.get(m, float('nan')):.4f}]" # Display metric value in label for easier identification in the list
-    #         for r in self.lst
-    #     ]
-    #     self.jcb["values"] = labels
-    #     self.li_lbl.config(text=f"{len(self.lst)} items (from CSV)")
-    #     self._t2_show()
-
     def _load_csv_to_df(self, target="tab2"):
 
         path = fd.askopenfilename(filetypes=[("CSV files", "*.csv")], title="Load list CSV")
@@ -743,6 +1099,12 @@ class SpectroViewer(tk.Tk):
                 fg=self.GRN
             )
 
+    def _cm_listbox_scroll(self, *args):
+        if args[0] == "moveto":
+            self.cm_listbox.yview_moveto(args[1])
+        elif args[0] == "scroll":
+            amount = int(args[1]) * 2   # pas de 2
+            self.cm_listbox.yview_scroll(amount, args[2])
 # ─────────────────────────────────────────────
 # Public entry point
 # ─────────────────────────────────────────────
