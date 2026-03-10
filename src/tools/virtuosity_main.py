@@ -13,7 +13,7 @@ from plotly.subplots import make_subplots
 from src.config import load_config_yaml
 from src.main import visualize_and_confirm_predictions
 from src.utils.gui_visualizer import launch_gui
-from src.utils.metrics import upper_bound_regression, distance_to_upper_bound
+from src.utils.metrics import upper_bound_regression, distance_to_upper_bound, bill_centroid
 
 def visualize_best_virtuosity_samples(df, config, x_col="trill_rate", y_col="bandwidth", sorting_metric="dist_to_bound", bin_width=2.0, top_n=5, plot=False):
     df_plot = df.dropna(subset=[sorting_metric])
@@ -229,7 +229,11 @@ def load_meta_and_morpho(DATA_DIR, file_timestamps, file_meta, file_morpho):
     df_timestamps = pd.read_csv(os.path.join(DATA_DIR, file_timestamps))
     df_metadata = pd.read_csv(os.path.join(DATA_DIR, file_meta))
     df_morpho = pd.read_csv(os.path.join(DATA_DIR, file_morpho))
+
+
     df_morpho["logmass"] = np.log(df_morpho["mass"])
+    df_morpho["bill_centroid"], df_morpho["log_bill_centroid"] = bill_centroid(df_morpho)
+    df_morpho["log_bill_centroid_over_logmass"] = df_morpho["log_bill_centroid"] / df_morpho["logmass"]
 
     df_timestamps["file_name"] = df_timestamps.apply(
         lambda r: r["file_name"].rsplit(".", 1)[0] + f"_seg{r['syllable_rank']}.wav",

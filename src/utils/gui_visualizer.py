@@ -286,10 +286,13 @@ class SpectroViewer(tk.Tk):
                   command=self._t2_build).pack(side="left", padx=14)
         
         tk.Button(ctrl, text="📂 Load CSV", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
-          command=self._t2_load_csv).pack(side="left", padx=4)
+          command=lambda: self._load_csv_to_df(target="tab2")).pack(side="left", padx=4)
         
         self.li_lbl = tk.Label(ctrl, text="No list yet", fg=self.FG2, bg=self.BG)
         self.li_lbl.pack(side="left")
+
+        tk.Button(ctrl, text="⬇ Export full list", bg=self.GRN, fg=self.BG2, relief="flat", padx=8,
+          command=self._t2_export_list).pack(side="left", padx=4)
 
         # Nav
         nav = tk.Frame(self.t2, bg=self.BG2, pady=6); nav.pack(fill="x", padx=14)
@@ -361,6 +364,21 @@ class SpectroViewer(tk.Tk):
         i = self.jcb.current()
         if i >= 0: self.lidx = i; self._t2_show()
 
+    def _t2_export_list(self):
+        if not self.lst:
+            messagebox.showwarning("Empty list", "No list to export — build or load a list first.")
+            return
+
+        path = fd.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")],
+            title="Export full list"
+        )
+        if not path: return
+
+        pd.DataFrame(self.lst).to_csv(path, index=False)
+        messagebox.showinfo("Exported", f"{len(self.lst)} rows saved → {os.path.basename(path)}")
+
     # ════════════════════════════════════════════
     # TAB 3
     # ════════════════════════════════════════════
@@ -368,6 +386,7 @@ class SpectroViewer(tk.Tk):
         ctrl = tk.Frame(self.t3, bg=self.BG); ctrl.pack(fill="x", padx=14, pady=10)
         num_cols = [c for c in self.df.select_dtypes(include=np.number).columns]
         cat_cols = [""] + [c for c in self.df.select_dtypes(include=object).columns]
+        self._t3_df = self.df.dropna(subset=num_cols) if num_cols else self.df.copy()
 
         for lbl, attr, default_fn, w in [
             ("X axis:",   "sx", lambda: next((c for c in num_cols if "rate" in c.lower() or "trill" in c.lower()), num_cols[0] if num_cols else ""), 18),
@@ -427,6 +446,12 @@ class SpectroViewer(tk.Tk):
           command=lambda: self._export_to_csv(
               getattr(self, "_plotly_df", self.df).iloc[self.pick_idx.get()]
           )).pack(side="left", padx=6)
+        
+        tk.Button(pick, text="📂 Load subset CSV", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
+          command=lambda: self._load_csv_to_df(target="tab3")).pack(side="left", padx=6)
+        self.t3_subset_lbl = tk.Label(pick, text="Full dataset", fg=self.FG2, bg=self.BG)
+        self.t3_subset_lbl.pack(side="left", padx=8)
+
 
         self.fig3, self.ax3 = plt.subplots(figsize=(10, 3.4), facecolor=self.BG2)
         self.ax3.set_facecolor(self.BG2)
@@ -457,7 +482,9 @@ class SpectroViewer(tk.Tk):
 
         if x not in self.df.columns or y not in self.df.columns:
             messagebox.showerror("Error", f"Columns not found: {x}, {y}"); return
-        df = self.df.dropna(subset=[x, y]).copy()
+        source = self._t3_df if self._t3_df is not None else self.df
+        df = source.dropna(subset=[x, y]).copy()
+        
         df["_idx"] = np.arange(len(df))          
         df["_label"] = df["file_name_radical"].astype(str) + "_seg" + df["segment_id"].astype(str)
         hover = [c for c in ["_label", "species", "genus", "family", self.metric_col]
@@ -647,35 +674,74 @@ class SpectroViewer(tk.Tk):
         combined.to_csv(self._export_path, index=False)
         messagebox.showinfo("Exported", f"Added → {os.path.basename(self._export_path)}  ({len(combined)} lines)")
 
-    def _t2_load_csv(self):
+    # def _t2_load_csv(self):
+    #     path = fd.askopenfilename(filetypes=[("CSV files", "*.csv")], title="Load list CSV")
+    #     if not path: return
+
+    #     loaded = pd.read_csv(path)
+    #     # Joining on file_name_radical + segment_id to ensure we only show rows that have corresponding spectrograms in our main dataframe
+    #     merged = pd.merge(
+    #         loaded[["file_name_radical", "segment_id"]],
+    #         self.df,
+    #         on=["file_name_radical", "segment_id"],
+    #         how="inner"
+    #     )
+    #     if merged.empty:
+    #         messagebox.showwarning("No Match",
+    #                             "No rows in the CSV match the loaded dataframe.")
+    #         return
+
+    #     self.lst  = [r for _, r in merged.iterrows()]
+    #     self.lidx = 0
+    #     m = self.metric_col
+    #     labels = [
+    #         f"{r.get('file_name_radical','?')}_seg{r.get('segment_id','?')}  "
+    #         f"[{m}={r.get(m, float('nan')):.4f}]" # Display metric value in label for easier identification in the list
+    #         for r in self.lst
+    #     ]
+    #     self.jcb["values"] = labels
+    #     self.li_lbl.config(text=f"{len(self.lst)} items (from CSV)")
+    #     self._t2_show()
+
+    def _load_csv_to_df(self, target="tab2"):
+
         path = fd.askopenfilename(filetypes=[("CSV files", "*.csv")], title="Load list CSV")
         if not path: return
 
         loaded = pd.read_csv(path)
-        # Joining on file_name_radical + segment_id to ensure we only show rows that have corresponding spectrograms in our main dataframe
         merged = pd.merge(
             loaded[["file_name_radical", "segment_id"]],
             self.df,
             on=["file_name_radical", "segment_id"],
             how="inner"
-        )
+        ).reset_index(drop=True)
+
         if merged.empty:
-            messagebox.showwarning("No Match",
-                                "No rows in the CSV match the loaded dataframe.")
+            messagebox.showwarning("No Match", "No rows in the CSV match the loaded dataframe.")
             return
 
-        self.lst  = [r for _, r in merged.iterrows()]
-        self.lidx = 0
-        m = self.metric_col
-        labels = [
-            f"{r.get('file_name_radical','?')}_seg{r.get('segment_id','?')}  "
-            f"[{m}={r.get(m, float('nan')):.4f}]" # Display metric value in label for easier identification in the list
-            for r in self.lst
-        ]
-        self.jcb["values"] = labels
-        self.li_lbl.config(text=f"{len(self.lst)} items (from CSV)")
-        self._t2_show()
+        n     = len(merged)
+        fname = os.path.basename(path)
 
+        if target == "tab2":
+            self.lst  = [r for _, r in merged.iterrows()]
+            self.lidx = 0
+            m = self.metric_col
+            labels = [
+                f"{r.get('file_name_radical','?')}_seg{r.get('segment_id','?')}  "
+                f"[{m}={r.get(m, float('nan')):.4f}]"
+                for r in self.lst
+            ]
+            self.jcb["values"] = labels
+            self.li_lbl.config(text=f"{n} items (from CSV: {fname})")
+            self._t2_show()
+
+        elif target == "tab3":
+            self._t3_df = merged
+            self.t3_subset_lbl.config(
+                text=f"Subset: {n} / {len(self.df)} samples  ({fname})",
+                fg=self.GRN
+            )
 
 # ─────────────────────────────────────────────
 # Public entry point

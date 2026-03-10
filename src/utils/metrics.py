@@ -42,12 +42,10 @@ def upper_bound_regression(
     df = df[[x_col, y_col]].dropna()
     if x_min is None:
         x_min = df[x_col].min()
-        print(f"Inferred x_min from data: {x_min:.2f}")
     df = df[df[x_col] >= x_min]
 
     if x_max is None:
         x_max = df[x_col].max()
-        print(f"Inferred x_max from data: {x_max:.2f}")
     df = df[df[x_col] <= x_max]
 
     # Define bins
@@ -123,3 +121,14 @@ def distance_to_upper_bound(
         return d
     else:
         return np.abs(d)
+
+
+def bill_centroid(df):
+    length = df["Beak.Length_Culmen"]
+    depth = df["Beak.Depth"]
+    width = df["Beak.Width"]
+
+    centroid = (length * depth * width)**(1/3)
+    log_centroid = np.log(centroid)
+
+    return centroid, log_centroid
