@@ -469,13 +469,6 @@ def predict_box_and_trill_rate(row_audio, config, seg_model, debug=False):
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     save_spectrogram(y_segment, sr, out_path, config)
-
-    # save_temp_spectro(y_segment,
-    #                 sr,
-    #                 out_path=out_path, 
-    #                 n_fft=config.n_fft, 
-    #                 hop_length=config.hop_length
-    #                 )
     
     pred = seg_model.predict(
         source=out_path,
