@@ -130,7 +130,7 @@ def trill_rate_detection_am2(
     trill_rate = freqs_env[valid][idx]
     return trill_rate, env, freqs_env, fft_env
 
-def trill_rate_robust_fixed(env, fs_env, rate_fft, min_rate=4, max_rate=200, debug=False):
+def trill_rate_robust(env, fs_env, rate_fft, min_rate=4, max_rate=200, debug=False):
     """
     Robust trill rate estimation using both FFT and autocorrelation peaks.
 
@@ -179,7 +179,7 @@ def trill_rate_robust_fixed(env, fs_env, rate_fft, min_rate=4, max_rate=200, deb
     valid = (lags >= min_lag) & (lags <= max_lag)
     
     if not np.any(valid):
-        return rate_fft, ac, lags, []
+        return rate_fft, ac, lags, [], 0.0
     
     peaks, props = find_peaks(
         ac[valid], 
@@ -188,12 +188,41 @@ def trill_rate_robust_fixed(env, fs_env, rate_fft, min_rate=4, max_rate=200, deb
     )
     
     if len(peaks) == 0:
-        return rate_fft, ac, lags, []
+        return rate_fft, ac, lags, [], 0.0
     
     if debug:
         print(f"\n=== Trill Rate Robust Debug ===")
         print(f"Rate FFT: {rate_fft:.2f} Hz")
         print(f"Pics trouvés: {len(peaks)}")
+
+    # ── Poids et bornes théoriques associées ────────────────────────────────
+    # Chaque entrée : (poids, contribution_min, contribution_max)
+    # contribution_min/max permettent de calculer SCORE_MIN/MAX dynamiquement
+    # si tu modifies un poids, les bornes se recalculent automatiquement
+    criteria = {
+        'fundamental_ac':      {'weight': 10.0, 'min': 0.0, 'max': 1.0},
+        # ac normalisée ∈ [0,1], multipliée par weight
+        'peak_alignment':      {'weight':  3.0, 'min': 0.0, 'max': 1.0},
+        # bonus binaire (0 ou 1) × weight
+        'harmonic_support':    {'weight':  1.0, 'min': 0.0, 'max': 2.0},
+        # somme de 2 ac ∈ [0,1] chacune → max = 2, multipliée par weight
+        'fft_proximity':       {'weight':  2.0, 'min': 0.0, 'max': 1.0},
+        # bonus ∈ [0,1] × weight (0 si fft_diff >= 0.15)
+        'subharmonic_penalty': {'weight': -1.0, 'min': 0.0, 'max': 1.0},
+        # pénalité binaire (0 ou 1) × weight (weight négatif)
+    }
+
+    # Score min/max théoriques calculés dynamiquement depuis les poids
+    SCORE_MAX = sum(
+        c['weight'] * c['max'] for c in criteria.values() if c['weight'] > 0
+    )
+    SCORE_MIN = sum(
+        c['weight'] * c['max'] for c in criteria.values() if c['weight'] < 0
+    )
+    # SCORE_MIN est négatif (pénalités), SCORE_MAX est positif (bonus)
+
+    if debug:
+        print(f"Score range: [{SCORE_MIN:.2f}, {SCORE_MAX:.2f}]")
     
     # Generate candidate rates from both FFT and autocorrelation peaks, including octaves
     candidates_info = []
@@ -239,21 +268,21 @@ def trill_rate_robust_fixed(env, fs_env, rate_fft, min_rate=4, max_rate=200, deb
     if debug:
         print(f"Unique candiates: {len(unique_candidates)}")
     
-    # Improved scoring
     best_candidate = None
     best_score = -np.inf
+    best_breakdown = {}    
     
     for cand in unique_candidates:
         candidate_rate = cand['rate']
-        score = 0
-        
+        breakdown      = {k: 0.0 for k in criteria}
+
         # CRIT 1. Autocorrelation amplitude at fundamental lag
         fundamental_lag = 1 / candidate_rate
         if min_lag <= fundamental_lag <= max_lag:
             idx = np.argmin(np.abs(lags[valid] - fundamental_lag))
             fundamental_ac = ac[valid][idx]
-            score += fundamental_ac * 10.0  # Poids fort
-            
+            breakdown['fundamental_ac'] = fundamental_ac   # ∈ [0, 1]
+
             if debug and fundamental_ac > 0.5:
                 print(f"  {candidate_rate:6.2f} Hz: fundamental_ac={fundamental_ac:.3f}")
         
@@ -263,7 +292,7 @@ def trill_rate_robust_fixed(env, fs_env, rate_fft, min_rate=4, max_rate=200, deb
             peak_lag = lags[valid][peak]
             peak_rate = 1 / peak_lag
             if abs(peak_rate - candidate_rate) / candidate_rate < 0.05:
-                score += 3.0
+                breakdown['peak_alignment'] = 1.0   # bonus binaire
                 break
         
         # CRIT 3. Harmonic consistency
@@ -273,39 +302,68 @@ def trill_rate_robust_fixed(env, fs_env, rate_fft, min_rate=4, max_rate=200, deb
             harmonic_lag = h / candidate_rate
             if min_lag <= harmonic_lag <= max_lag:
                 idx_h = np.argmin(np.abs(lags[valid] - harmonic_lag))
-                harmonic_ac = ac[valid][idx_h]
-                harmonic_support += harmonic_ac
+                harmonic_support += ac[valid][idx_h]
         
-        score += harmonic_support * 1.0
-        
+        breakdown['harmonic_support'] = harmonic_support   # ∈ [0, 2]  
+
         # CRIT 4. Proximity to FFT-based rate
         # Bonus if the candidate is close to the initial FFT estimate
         fft_diff = abs(candidate_rate - rate_fft) / rate_fft
         if fft_diff < 0.15:
-            score += 2.0 * (1 - fft_diff)
-        
+            breakdown['fft_proximity'] = 1.0 - fft_diff   # ∈ [0, 1]
+
         # CRIT 5. Penalize low subharmonics (e.g., 0.5×) if they are not supported by strong autocorrelation
         # This helps avoid selecting a subharmonic that is not actually present in the signal
 
         if abs(candidate_rate - rate_fft/2) / rate_fft < 0.1:
-            score -= 1.0 
-        
+            breakdown['subharmonic_penalty'] = 1.0   # × weight négatif → soustraction
+
+        # Calculate total score
+        score = sum(
+            breakdown[k] * criteria[k]['weight'] for k in criteria
+        )
+
         if debug:
-            print(f"  Candidate {candidate_rate:6.2f} Hz ({cand['source']:12s}): score={score:.2f}")
+            contrib_str = "  ".join(
+                f"{k}={criteria[k]['weight'] * breakdown[k]:+.2f}"
+                for k in criteria
+            )
+            print(f"  {candidate_rate:6.2f} Hz ({cand['source']:15s}) "
+                  f"score={score:.2f}  [{contrib_str}]")
         
         if score > best_score:
             best_score = score
             best_candidate = cand
+            best_breakdown = breakdown.copy()
     
+    # if best_candidate:
+    #     confidence = (best_score - SCORE_MIN) / ( - SCORE_MIN)
+    #     confidence = float(np.clip(confidence, 0.0, 1.0))
+    # else:
+    #     confidence = 0.0
+
+    if best_candidate:
+        score_range = SCORE_MAX - SCORE_MIN
+        if score_range > 0:
+            confidence = (best_score - SCORE_MIN) / score_range
+        else:
+            confidence = 0.0
+        confidence = float(np.clip(confidence, 0.0, 1.0))
+    else:
+        confidence = 0.0
+
+
     if debug and best_candidate:
-        print(f"→ Chosen: {best_candidate['rate']:.2f} Hz (score={best_score:.2f})")
-    
+        print(f"→ Chosen : {best_candidate['rate']:.2f} Hz  "
+              f"score={best_score:.2f}  confidence={confidence:.3f}")
+        print(f"  Breakdown: { {k: f'{v:.3f}' for k, v in best_breakdown.items()} }")
+
     peak_lags = lags[valid][peaks[:8]] if len(peaks) > 0 else None
 
     if best_candidate:
-        return best_candidate['rate'], ac, lags, peak_lags
+        return best_candidate['rate'], ac, lags, peak_lags, confidence
     else:
-        return rate_fft, ac, lags, peak_lags
+        return rate_fft, ac, lags, peak_lags, 0.0
 
 def estimate_trill_rate(signal, sample_rate=48000, hop_length=64, debug=False):
     """
@@ -336,5 +394,5 @@ def estimate_trill_rate(signal, sample_rate=48000, hop_length=64, debug=False):
     """
     rate_fft, env, freqs_env, fft_env = trill_rate_detection_am2(signal, sample_rate)
     fs_env = sample_rate / hop_length  # hop_length utilisé dans stft
-    rate_robust, ac, lags, peak_lags = trill_rate_robust_fixed(env, fs_env, rate_fft, debug=debug)
-    return rate_robust
+    rate_robust, ac, lags, peak_lags, confidence = trill_rate_robust(env, fs_env, rate_fft, debug=debug)
+    return rate_robust, confidence

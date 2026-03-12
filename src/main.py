@@ -490,7 +490,7 @@ def predict_box_and_trill_rate(row_audio, config, seg_model, debug=False):
         prediction = None
     else:
         box = pred.boxes.xyxyn[0].cpu().numpy()  # [x1, y1, x2, y2] normalisés
-        conf = float(pred.boxes.conf[0])
+        conf_segmentation = float(pred.boxes.conf[0])
 
         x1, y1, x2, y2 = box
         t_min, t_max, f_min, f_max = yolo_to_tf_xyxy(x1, 
@@ -512,7 +512,7 @@ def predict_box_and_trill_rate(row_audio, config, seg_model, debug=False):
 
         f_min_podos, f_max_podos = get_bandwidth_podos(y_segment_cropped, sr, config.n_fft, config.hop_length)
 
-        trill_rate = estimate_trill_rate(y_segment_cropped, sr, hop_length=config.hop_length, debug=debug)
+        trill_rate, confidence_trill_rate = estimate_trill_rate(y_segment_cropped, sr, hop_length=config.hop_length, debug=debug)
         count = int(np.round(trill_rate * trill_duration))
 
         prediction = {
@@ -522,7 +522,8 @@ def predict_box_and_trill_rate(row_audio, config, seg_model, debug=False):
             "f_max": float(f_max),
             "f_min_podos": float(f_min_podos),
             "f_max_podos": float(f_max_podos),
-            "confidence": conf,
+            "confidence_segmentation": conf_segmentation,
+            "confidence_trill_rate": confidence_trill_rate,
             "count": count
         }
     return y_segment, sr, start, end, prediction
@@ -576,7 +577,8 @@ def predict_whole_dataset(df_audio_files, config, stop_debug = False):
                 "f_max": prediction["f_max"],
                 "f_min_podos": prediction["f_min_podos"],
                 "f_max_podos": prediction["f_max_podos"],
-                "confidence": prediction["confidence"],
+                "confidence_segmentation": prediction["confidence_segmentation"],
+                "confidence_trill_rate": prediction["confidence_trill_rate"],
                 "count": prediction["count"]
             })
         else:
@@ -591,7 +593,8 @@ def predict_whole_dataset(df_audio_files, config, stop_debug = False):
                 "f_max": None,
                 "f_min_podos": None,
                 "f_max_podos": None,
-                "confidence": None,
+                "confidence_segmentation": None,
+                "confidence_trill_rate": None,
                 "count": 0
             })
     
