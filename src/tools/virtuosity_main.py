@@ -268,7 +268,7 @@ def main():
 
     config = load_config_yaml(yaml_path="config.yaml")
 
-    pred_annotation_file = "annotations_trills_v2_tests_predictions.csv"
+    pred_annotation_file = "trills_11032026_predictions.csv"#"annotations_trills_v2_tests_predictions.csv"
     file_timestamps = "segments_passerines_filtered.csv"
     file_meta = "traits_data_pc_gmm_8components_proba_filtered.csv"
     file_morpho = "model_traits_morpho_social_data.csv"

@@ -75,6 +75,8 @@ class SpectroViewer(tk.Tk):
         self.configure(bg=self.BG)
         self._style(); self._header(); self._notebook()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self._t2_df = None  # DataFrame for Tab 2 subset
     
     def _on_close(self):
         sd.stop()
@@ -111,17 +113,6 @@ class SpectroViewer(tk.Tk):
             tk.Radiobutton(h, text=txt, variable=self.spectro_mode, value=val,
                         fg=self.FG, bg=self.BG2, selectcolor=self.SURF,
                         activebackground=self.BG2).pack(side="left", padx=4)
-            
-        # tk.Label(h, text="Play:", fg=self.FG2, bg=self.BG2).pack(side="left", padx=(24, 4))
-        # tk.Button(h, text="▶ Segment", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
-        #         command=lambda: self._play_audio(self._current_row, mode="segment")
-        #         ).pack(side="left", padx=2)
-        # tk.Button(h, text="▶ Prediction ±10%", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
-        #         command=lambda: self._play_audio(self._current_row, mode="prediction")
-        #         ).pack(side="left", padx=2)
-        # tk.Button(h, text="⏹", bg=self.SURF, fg=self.FG, relief="flat", padx=6,
-        #         command=sd.stop).pack(side="left", padx=2)
-        # self._current_row = None 
 
         tk.Label(h, text=f"{len(self.df)} samples", fg=self.GRN, bg=self.BG2,
                  font=("Helvetica", 9)).pack(side="right", padx=16)
@@ -256,46 +247,82 @@ class SpectroViewer(tk.Tk):
     # TAB 2
     # ════════════════════════════════════════════
     def _tab2(self):
-        ctrl = tk.Frame(self.t2, bg=self.BG); ctrl.pack(fill="x", padx=14, pady=10)
+        # ── Subset bar ──
+        sub_bar = tk.Frame(self.t2, bg=self.BG); sub_bar.pack(fill="x", padx=14, pady=(6, 0))
+        tk.Button(sub_bar, text="📂 Load CSV", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
+                command=lambda: self._load_csv_to_df(target="tab2")
+                ).pack(side="left", padx=4)
+        tk.Button(sub_bar, text="✕ Clear", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
+                command=self._t2_clear_subset).pack(side="left", padx=4)
+        self.t2_subset_lbl = tk.Label(sub_bar, text="Full dataset", fg=self.FG2, bg=self.BG)
+        self.t2_subset_lbl.pack(side="left", padx=10)
+
+        # ── Criterion row ──
+        ctrl = tk.Frame(self.t2, bg=self.BG); ctrl.pack(fill="x", padx=14, pady=(6, 2))
         tk.Label(ctrl, text="Criterion:", fg=self.FG2, bg=self.BG).pack(side="left")
         self.crit = tk.StringVar(value="top_n_high")
-        for v, t in [("top_n_high", "Top N highest"), ("top_n_low", "Top N lowest"), ("threshold", "Threshold filter")]:
+        for v, t in [("top_n_high", "Top N highest"),
+                    ("top_n_low",  "Top N lowest"),
+                    ("threshold",  "Threshold filter"),
+                    ("taxon_list", "Taxon list")]:
             tk.Radiobutton(ctrl, text=t, variable=self.crit, value=v,
-                           command=self._t2_toggle,
-                           fg=self.FG, bg=self.BG, selectcolor=self.SURF,
-                           activebackground=self.BG).pack(side="left", padx=8)
+                        command=self._t2_toggle,
+                        fg=self.FG, bg=self.BG, selectcolor=self.SURF,
+                        activebackground=self.BG).pack(side="left", padx=6)
 
-        # Parameters frame (Top-N or Threshold depending on criterion)   
-        param_frame = tk.Frame(ctrl, bg=self.BG)
-        param_frame.pack(side="left", padx=10)
+        param_frame = tk.Frame(ctrl, bg=self.BG); param_frame.pack(side="left", padx=10)
 
-        # Top-N
-        self.tnf = tk.Frame(param_frame, bg=self.BG); self.tnf.pack(side="left", padx=10)
+        self.tnf = tk.Frame(param_frame, bg=self.BG); self.tnf.pack(side="left")
         tk.Label(self.tnf, text="N:", fg=self.FG2, bg=self.BG).pack(side="left")
         self.nvar = tk.IntVar(value=10)
-        tk.Spinbox(self.tnf, from_=1, to=1000, textvariable=self.nvar, width=5,
-                   bg=self.SURF, fg=self.FG, insertbackground="white",
-                   buttonbackground=self.SURF).pack(side="left")
-        # Threshold
+        tk.Spinbox(self.tnf, from_=1, to=4000, textvariable=self.nvar, width=5,
+                bg=self.SURF, fg=self.FG, insertbackground="white",
+                buttonbackground=self.SURF).pack(side="left")
+
         self.thf = tk.Frame(param_frame, bg=self.BG)
         self.opv = tk.StringVar(value=">")
-        ttk.Combobox(self.thf, textvariable=self.opv, values=[">","<",">=","<="], width=4).pack(side="left")
+        ttk.Combobox(self.thf, textvariable=self.opv,
+                    values=[">", "<", ">=", "<="], width=4).pack(side="left")
         self.tv = tk.DoubleVar(value=0.5)
         tk.Entry(self.thf, textvariable=self.tv, width=8,
-                 bg=self.SURF, fg=self.FG, insertbackground="white").pack(side="left", padx=4)
-        
-        tk.Button(ctrl, text="Build List ▶", bg=self.ACC, fg=self.BG2,
-                  font=("Helvetica", 9, "bold"), relief="flat", padx=10,
-                  command=self._t2_build).pack(side="left", padx=14)
-        
-        tk.Button(ctrl, text="📂 Load CSV", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
-          command=lambda: self._load_csv_to_df(target="tab2")).pack(side="left", padx=4)
-        
-        self.li_lbl = tk.Label(ctrl, text="No list yet", fg=self.FG2, bg=self.BG)
-        self.li_lbl.pack(side="left")
+                bg=self.SURF, fg=self.FG, insertbackground="white").pack(side="left", padx=4)
 
-        tk.Button(ctrl, text="⬇ Export full list", bg=self.GRN, fg=self.BG2, relief="flat", padx=8,
-          command=self._t2_export_list).pack(side="left", padx=4)
+        tax_cols = [c for c in ["species", "gen", "family"] if c in self.df.columns]
+        self.taxf = tk.Frame(param_frame, bg=self.BG)
+        tk.Label(self.taxf, text="Level:", fg=self.FG2, bg=self.BG).pack(side="left")
+        self.tax_level_t2 = tk.StringVar(value=tax_cols[0] if tax_cols else "")
+        ttk.Combobox(self.taxf, textvariable=self.tax_level_t2,
+                    values=tax_cols, width=10).pack(side="left", padx=4)
+        tk.Label(self.taxf, text="Value:", fg=self.FG2, bg=self.BG).pack(side="left")
+        self.tax_value_t2    = tk.StringVar(value="")
+        self.tax_value_cb_t2 = ttk.Combobox(self.taxf, textvariable=self.tax_value_t2, width=20)
+        self.tax_value_cb_t2.pack(side="left", padx=4)
+        self.tax_level_t2.trace_add("write", lambda *_: self._t2_update_tax_values())
+        self._t2_update_tax_values()
+
+        # ── Taxonomic filter row (visible only for top_n) ──
+        tax_row = tk.Frame(self.t2, bg=self.BG); tax_row.pack(fill="x", padx=14, pady=(0, 2))
+        tk.Label(tax_row, text="Taxonomic filter:", fg=self.FG2, bg=self.BG).pack(side="left")
+        self.best_per_var = tk.StringVar(value="")
+        self.best_per_cb  = ttk.Combobox(tax_row, textvariable=self.best_per_var,
+                                        values=[""] + tax_cols, width=12)
+        self.best_per_cb.pack(side="left", padx=4)
+        tk.Label(tax_row, text="→ keep top N per taxon value",
+                fg=self.FG2, bg=self.BG, font=("Helvetica", 8)).pack(side="left")
+
+        # ── Action row ──
+        ctrl2 = tk.Frame(self.t2, bg=self.BG); ctrl2.pack(fill="x", padx=14, pady=(2, 6))
+        tk.Button(ctrl2, text="Build List ▶", bg=self.ACC, fg=self.BG2,
+                font=("Helvetica", 9, "bold"), relief="flat", padx=10,
+                command=self._t2_build).pack(side="left", padx=(0, 6))
+        tk.Button(ctrl2, text="Filter current list ▶", bg=self.SURF, fg=self.FG,
+                relief="flat", padx=8,
+                command=self._t2_filter_current).pack(side="left", padx=6)
+        self.li_lbl = tk.Label(ctrl2, text="No list yet", fg=self.FG2, bg=self.BG)
+        self.li_lbl.pack(side="left", padx=10)
+        tk.Button(ctrl2, text="⬇ Export full list", bg=self.GRN, fg=self.BG2,
+                relief="flat", padx=8,
+                command=self._t2_export_list).pack(side="left", padx=4)
 
         # Nav
         nav = tk.Frame(self.t2, bg=self.BG2, pady=6); nav.pack(fill="x", padx=14)
@@ -329,25 +356,81 @@ class SpectroViewer(tk.Tk):
         #         command=sd.stop).pack(side="left", padx=6)
 
     def _t2_toggle(self):
-        if self.crit.get() == "top_n_high":
-            self.tnf.pack(side="left", padx=10); self.thf.pack_forget()
-        elif self.crit.get() == "top_n_low":
-            self.tnf.pack(side="left", padx=10); self.thf.pack_forget()
-        else:
-            self.thf.pack(side="left", padx=4); self.tnf.pack_forget()
+        crit = self.crit.get()
+        self.tnf.pack_forget()
+        self.thf.pack_forget()
+        self.taxf.pack_forget()
+        if crit in ("top_n_high", "top_n_low"):
+            self.tnf.pack(side="left")
+        elif crit == "threshold":
+            self.thf.pack(side="left", padx=4)
+        elif crit == "taxon_list":
+            self.taxf.pack(side="left")
+        # Taxonomic filter only makes sense for top_n
+        state = "normal" if crit in ("top_n_high", "top_n_low") else "disabled"
+        self.best_per_cb.config(state=state)
+
+    @property
+    def _active_t2_df(self):
+        return self._t2_df if self._t2_df is not None else self.df
+
+    def _t2_clear_subset(self):
+        self._t2_df = None
+        self.t2_subset_lbl.config(text="Full dataset", fg=self.FG2)
 
     def _t2_build(self):
-        m = self.metric_col; df = self.df.dropna(subset=[m])
-        if self.crit.get() == "top_n_high":
-            sub = df.nlargest(self.nvar.get(), m)
-        elif self.crit.get() == "top_n_low":
-            sub = df.nsmallest(self.nvar.get(), m)
+        self._t2_apply_criterion(source_df=self._active_t2_df)
+
+    def _t2_filter_current(self):
+        if not self.lst:
+            messagebox.showwarning("Empty list", "Build a list first."); return
+        self._t2_apply_criterion(source_df=pd.DataFrame(self.lst))
+
+    def _t2_apply_criterion(self, source_df):
+        m  = self.metric_col
+        if m not in source_df.columns:
+            messagebox.showerror("Error", f"Metric '{m}' not found."); return
+        df       = source_df.dropna(subset=[m])
+        crit     = self.crit.get()
+        best_per = self.best_per_var.get() or None
+
+        if crit == "top_n_high":
+            if best_per and best_per in df.columns:
+                sub = (df.sort_values(m, ascending=False)
+                        .groupby(best_per, group_keys=False)
+                        .head(self.nvar.get()))
+            else:
+                sub = df.nlargest(self.nvar.get(), m)
+
+        elif crit == "top_n_low":
+            if best_per and best_per in df.columns:
+                sub = (df.sort_values(m, ascending=True)
+                        .groupby(best_per, group_keys=False)
+                        .head(self.nvar.get()))
+            else:
+                sub = df.nsmallest(self.nvar.get(), m)
+
+        elif crit == "threshold":
+            op  = self.opv.get(); thr = self.tv.get()
+            sub = df[{">": df[m] > thr, "<": df[m] < thr,
+                    ">=": df[m] >= thr, "<=": df[m] <= thr}[op]]
+
+        elif crit == "taxon_list":
+            col = self.tax_level_t2.get(); val = self.tax_value_t2.get()
+            if not col or not val:
+                messagebox.showwarning("Missing", "Select a level and a value."); return
+            sub = df[df[col] == val]
         else:
-            op = self.opv.get(); thr = self.tv.get()
-            sub = df[{">": df[m]>thr,"<": df[m]<thr,">=": df[m]>=thr,"<=": df[m]<=thr}[op]]
-        self.lst  = [r for _, r in sub.iterrows()]; self.lidx = 0
-        labels = [f"{r.get('file_name_radical','?')}_seg{r.get('segment_id','?')}"
-                  for r in self.lst]
+            return
+
+        self.lst  = [r for _, r in sub.iterrows()]
+        self.lidx = 0
+        m_ = self.metric_col
+        labels = [
+            f"{r.get('file_name_radical','?')}_seg{r.get('segment_id','?')}  "
+            f"[{m_}={r.get(m_, float('nan')):.4f}]"
+            for r in self.lst
+        ]
         self.jcb["values"] = labels
         self.li_lbl.config(text=f"{len(self.lst)} items")
         if self.lst: self._t2_show()
@@ -366,6 +449,13 @@ class SpectroViewer(tk.Tk):
     def _t2_jump(self):
         i = self.jcb.current()
         if i >= 0: self.lidx = i; self._t2_show()
+
+    def _t2_update_tax_values(self):
+        col = self.tax_level_t2.get()
+        if col and col in self.df.columns:
+            vals = [""] + sorted(self.df[col].dropna().unique().tolist())
+            self.tax_value_cb_t2["values"] = vals
+            self.tax_value_cb_t2.set("")
 
     def _t2_export_list(self):
         if not self.lst:
@@ -452,6 +542,8 @@ class SpectroViewer(tk.Tk):
         
         tk.Button(pick, text="📂 Load subset CSV", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
           command=lambda: self._load_csv_to_df(target="tab3")).pack(side="left", padx=6)
+        tk.Button(pick, text="✕ Clear subset", bg=self.SURF, fg=self.FG, relief="flat", padx=8,
+          command=self._t3_clear_subset).pack(side="left", padx=4)
         self.t3_subset_lbl = tk.Label(pick, text="Full dataset", fg=self.FG2, bg=self.BG)
         self.t3_subset_lbl.pack(side="left", padx=8)
 
@@ -608,10 +700,28 @@ class SpectroViewer(tk.Tk):
         else:
             # messagebox.showwarning("Index invalide", f"Index {idx} hors bornes (0–{len(source)-1})")
             messagebox.showwarning("Invalid Index", f"Index {idx} out of bounds (0–{len(source)-1})")
+    def _t3_clear_subset(self):
+        self._t3_df = None
+        self.t3_subset_lbl.config(text="Full dataset", fg=self.FG2)
 
     def _tab4(self):
         num_cols = [c for c in self.df.select_dtypes(include=np.number).columns]
         tax_cols = [c for c in ["species", "gen", "family"] if c in self.df.columns]
+
+        self._t4_df = None
+
+        # Barre de chargement
+        load_bar = tk.Frame(self.t4, bg=self.BG); load_bar.pack(fill="x", padx=10, pady=(8, 2))
+        tk.Button(load_bar, text="📂 Load subset CSV", bg=self.SURF, fg=self.FG,
+                relief="flat", padx=8,
+                command=lambda: self._load_csv_to_df(target="tab4")
+                ).pack(side="left", padx=4)
+        tk.Button(load_bar, text="✕ Clear subset", bg=self.SURF, fg=self.FG,
+                relief="flat", padx=8,
+                command=self._t4_clear_subset
+                ).pack(side="left", padx=4)
+        self.t4_subset_lbl = tk.Label(load_bar, text="Full dataset", fg=self.FG2, bg=self.BG)
+        self.t4_subset_lbl.pack(side="left", padx=10)
 
         # Trois colonnes côte à côte
         cols_frame = tk.Frame(self.t4, bg=self.BG)
@@ -652,6 +762,14 @@ class SpectroViewer(tk.Tk):
         tk.Checkbutton(parent, text=text, variable=var,
                     fg=self.FG, bg=self.BG2, selectcolor=self.SURF,
                     activebackground=self.BG2).pack(anchor="w")
+        
+    def _t4_clear_subset(self):
+        self._t4_df = None
+        self.t4_subset_lbl.config(text="Full dataset", fg=self.FG2)
+
+    @property
+    def _active_t4_df(self):
+        return self._t4_df if self._t4_df is not None else self.df
 
 
     # ── Section 1 : Corrélation bivariée ────────────────────────────────────────
@@ -712,7 +830,7 @@ class SpectroViewer(tk.Tk):
         if x_col not in self.df.columns or y_col not in self.df.columns:
             messagebox.showerror("Error", f"Columns not found: {x_col}, {y_col}"); return
 
-        df = self.df[[x_col, y_col] + (
+        df = self._active_t4_df[[x_col, y_col] + (
             [self.bv_tax_col.get()] if self.bv_tax_col.get() in self.df.columns else []
         ) + (
             [self.bv_color.get()] if self.bv_color.get() in self.df.columns else []
@@ -828,7 +946,7 @@ class SpectroViewer(tk.Tk):
         if len(selected) < 2:
             messagebox.showwarning("Selection", "Select at least 2 columns."); return
 
-        corr  = self.df[selected].dropna().corr(method=self.cm_method.get())
+        corr  = self._active_t4_df[selected].dropna().corr(method=self.cm_method.get())
         vals  = corr.values.copy()
         dark  = self.cm_theme.get() == "dark"
 
@@ -907,10 +1025,10 @@ class SpectroViewer(tk.Tk):
         ptype   = self.dist_type.get()
         dark    = self.dist_theme.get() == "dark"
 
-        if col not in self.df.columns:
+        if col not in self._active_t4_df.columns:
             messagebox.showerror("Error", f"Column not found: {col}"); return
 
-        df = self.df[[col] + ([grp_col] if grp_col else [])].dropna(subset=[col]).copy()
+        df = self._active_t4_df[[col] + ([grp_col] if grp_col else [])].dropna(subset=[col]).copy()
         if self.dist_logx.get():
             df = df[df[col] > 0]
             df[col] = np.log(df[col])
@@ -1080,6 +1198,10 @@ class SpectroViewer(tk.Tk):
         fname = os.path.basename(path)
 
         if target == "tab2":
+            # Loads into both the navigation list AND the working subset
+            self._t2_df = merged
+            self.t2_subset_lbl.config(
+                text=f"Subset: {n} / {len(self.df)} samples  ({fname})", fg=self.GRN)
             self.lst  = [r for _, r in merged.iterrows()]
             self.lidx = 0
             m = self.metric_col
@@ -1095,6 +1217,13 @@ class SpectroViewer(tk.Tk):
         elif target == "tab3":
             self._t3_df = merged
             self.t3_subset_lbl.config(
+                text=f"Subset: {n} / {len(self.df)} samples  ({fname})",
+                fg=self.GRN
+            )
+        
+        elif target == "tab4":
+            self._t4_df = merged
+            self.t4_subset_lbl.config(
                 text=f"Subset: {n} / {len(self.df)} samples  ({fname})",
                 fg=self.GRN
             )
