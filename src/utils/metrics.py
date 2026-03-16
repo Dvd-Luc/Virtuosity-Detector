@@ -84,6 +84,7 @@ def distance_to_upper_bound(
     reg,
     x_col="trill_rate",
     y_col="bandwidth",
+    log_y=False,
     signed=False
 ):
     """
@@ -99,6 +100,8 @@ def distance_to_upper_bound(
         X variable name
     y_col : str
         Y variable name
+    log_y : bool
+        Whether to log-transform Y before computing distances
     signed : bool
         If True, distances are signed (negative = below the bound)
 
@@ -114,6 +117,8 @@ def distance_to_upper_bound(
     x = df[x_col].values
     y = df[y_col].values
 
+    if log_y:
+        y = np.log(y + 1e-9)
     # Distance formula
     d = (a * x - y + b) / np.sqrt(a**2 + 1)
 
