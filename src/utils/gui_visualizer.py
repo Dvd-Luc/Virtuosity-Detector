@@ -295,7 +295,7 @@ class SpectroViewer(tk.Tk):
                     values=tax_cols, width=10).pack(side="left", padx=4)
         tk.Label(self.taxf, text="Value:", fg=self.FG2, bg=self.BG).pack(side="left")
         self.tax_value_t2    = tk.StringVar(value="")
-        self.tax_value_cb_t2 = ttk.Combobox(self.taxf, textvariable=self.tax_value_t2, width=20)
+        self.tax_value_cb_t2 = ttk.Combobox(self.taxf, textvariable=self.tax_value_t2, width=30)
         self.tax_value_cb_t2.pack(side="left", padx=4)
         self.tax_level_t2.trace_add("write", lambda *_: self._t2_update_tax_values())
         self._t2_update_tax_values()
@@ -416,7 +416,8 @@ class SpectroViewer(tk.Tk):
                     ">=": df[m] >= thr, "<=": df[m] <= thr}[op]]
 
         elif crit == "taxon_list":
-            col = self.tax_level_t2.get(); val = self.tax_value_t2.get()
+            col = self.tax_level_t2.get(); 
+            val = self.tax_value_t2.get().split("  (")[0]
             if not col or not val:
                 messagebox.showwarning("Missing", "Select a level and a value."); return
             sub = df[df[col] == val]
@@ -453,7 +454,9 @@ class SpectroViewer(tk.Tk):
     def _t2_update_tax_values(self):
         col = self.tax_level_t2.get()
         if col and col in self.df.columns:
-            vals = [""] + sorted(self.df[col].dropna().unique().tolist())
+            counts = self.df[col].value_counts()
+            vals   = [""] + [f"{v}  ({counts.get(v, 0)})"
+                            for v in sorted(self.df[col].dropna().unique().tolist())]
             self.tax_value_cb_t2["values"] = vals
             self.tax_value_cb_t2.set("")
 
@@ -969,14 +972,18 @@ class SpectroViewer(tk.Tk):
             hovertemplate="%{y} × %{x}: %{z:.3f}<extra></extra>"
         ))
 
+        list_title = self.t4_subset_lbl.cget("text")
+
         fig.update_layout(
-            title=f"{self.cm_method.get().capitalize()} Correlation Matrix",
+            title=f"{self.cm_method.get().capitalize()} Correlation Matrix - {list_title}",
+            title_font=dict(size=18, color="#cdd6f4" if dark else "#333"),
             template="plotly_dark" if dark else "plotly_white",
             paper_bgcolor="#1e1e2e" if dark else "#f5f5f5",
             plot_bgcolor="#181825"  if dark else "#ffffff",
-            xaxis=dict(tickangle=-45),
-            yaxis=dict(autorange="reversed"),
-            font=dict(color="#cdd6f4" if dark else "#333")
+            font=dict(size=14, color="#cdd6f4" if dark else "#333"),  # taille par défaut partout
+            xaxis=dict(tickangle=-45, tickfont=dict(size=15)),
+            yaxis=dict(autorange="reversed", tickfont=dict(size=15)),
+            coloraxis_colorbar=dict(tickfont=dict(size=12)),
         )
         self._t4_open_html(fig)
 
