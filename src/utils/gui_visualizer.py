@@ -70,14 +70,20 @@ class SpectroViewer(tk.Tk):
         super().__init__()
         self.df, self.config, self.metric_col = df.copy(), config, metric_col
         self._current_row = None
+
+        # --- Median filtering --- #
+        self.median_ind = tk.BooleanVar(value=False)
+        self.median_tax = tk.BooleanVar(value=False)
+        self.median_tax_col = tk.StringVar(value="")
+
+        self._t2_df = None  # DataFrame for Tab 2 subset
+
         self.title("Trill Spectrogram Viewer")
         self.geometry("1250x840")
         self.configure(bg=self.BG)
         self._style(); self._header(); self._notebook()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
-        self._t2_df = None  # DataFrame for Tab 2 subset
-    
+        
     def _on_close(self):
         sd.stop()
         self.destroy()
@@ -257,6 +263,8 @@ class SpectroViewer(tk.Tk):
         self.t2_subset_lbl = tk.Label(sub_bar, text="Full dataset", fg=self.FG2, bg=self.BG)
         self.t2_subset_lbl.pack(side="left", padx=10)
 
+        self._median_filter_bar(self.t2)
+
         # ── Criterion row ──
         ctrl = tk.Frame(self.t2, bg=self.BG); ctrl.pack(fill="x", padx=14, pady=(6, 2))
 
@@ -426,8 +434,9 @@ class SpectroViewer(tk.Tk):
         m  = self.metric_col
         if m not in source_df.columns:
             messagebox.showerror("Error", f"Metric '{m}' not found."); return
-        df       = source_df.dropna(subset=[m])
-        crit     = self.crit.get()
+        df = self._apply_median_filter(source_df)
+        df = df.dropna(subset=[m])
+        crit = self.crit.get()
         best_per = self.best_per_var.get() or None
 
         if crit == "top_n_high":
@@ -588,6 +597,7 @@ class SpectroViewer(tk.Tk):
         self.t3_subset_lbl = tk.Label(pick, text="Full dataset", fg=self.FG2, bg=self.BG)
         self.t3_subset_lbl.pack(side="left", padx=8)
 
+        self._median_filter_bar(self.t3)
 
         self.fig3, self.ax3 = plt.subplots(figsize=(10, 3.4), facecolor=self.BG2)
         self.ax3.set_facecolor(self.BG2)
@@ -619,8 +629,11 @@ class SpectroViewer(tk.Tk):
         if x not in self.df.columns or y not in self.df.columns:
             messagebox.showerror("Error", f"Columns not found: {x}, {y}"); return
         source = self._t3_df if self._t3_df is not None else self.df
-        df = source.dropna(subset=[x, y]).copy()
+
         
+        df = self._apply_median_filter(source)
+        df = df.dropna(subset=[x, y, "file_name_radical", "segment_id"]).copy()
+
         df["_idx"] = np.arange(len(df))          
         df["_label"] = df["file_name_radical"].astype(str) + "_seg" + df["segment_id"].astype(str)
         hover = [c for c in ["_label", "species", "genus", "family", self.metric_col]
@@ -751,7 +764,7 @@ class SpectroViewer(tk.Tk):
 
         self._t4_df = None
 
-        # Barre de chargement
+        # Load/clear subset bar
         load_bar = tk.Frame(self.t4, bg=self.BG); load_bar.pack(fill="x", padx=10, pady=(8, 2))
         tk.Button(load_bar, text="📂 Load subset CSV", bg=self.SURF, fg=self.FG,
                 relief="flat", padx=8,
@@ -764,7 +777,9 @@ class SpectroViewer(tk.Tk):
         self.t4_subset_lbl = tk.Label(load_bar, text="Full dataset", fg=self.FG2, bg=self.BG)
         self.t4_subset_lbl.pack(side="left", padx=10)
 
-        # Trois colonnes côte à côte
+        self._median_filter_bar(self.t4)
+
+        # Three columns for the three sections
         cols_frame = tk.Frame(self.t4, bg=self.BG)
         cols_frame.pack(fill="both", expand=True, padx=10, pady=10)
         cols_frame.columnconfigure(0, weight=1)
@@ -871,11 +886,13 @@ class SpectroViewer(tk.Tk):
         if x_col not in self.df.columns or y_col not in self.df.columns:
             messagebox.showerror("Error", f"Columns not found: {x_col}, {y_col}"); return
 
-        df = self._active_t4_df[[x_col, y_col] + (
+        df = self._apply_median_filter(self._active_t4_df)
+        df = df[[x_col, y_col] + (
             [self.bv_tax_col.get()] if self.bv_tax_col.get() in self.df.columns else []
         ) + (
             [self.bv_color.get()] if self.bv_color.get() in self.df.columns else []
         )].dropna(subset=[x_col, y_col]).copy()
+        
 
         # Filtre taxon
         tax_col = self.bv_tax_col.get(); tax_val = self.bv_tax_val.get()
@@ -987,7 +1004,10 @@ class SpectroViewer(tk.Tk):
         if len(selected) < 2:
             messagebox.showwarning("Selection", "Select at least 2 columns."); return
 
-        corr  = self._active_t4_df[selected].dropna().corr(method=self.cm_method.get())
+        df   = self._apply_median_filter(self._active_t4_df)
+        df = df[selected].dropna()
+        corr = df.corr(method=self.cm_method.get())
+
         vals  = corr.values.copy()
         dark  = self.cm_theme.get() == "dark"
 
@@ -1073,7 +1093,9 @@ class SpectroViewer(tk.Tk):
         if col not in self._active_t4_df.columns:
             messagebox.showerror("Error", f"Column not found: {col}"); return
 
-        df = self._active_t4_df[[col] + ([grp_col] if grp_col else [])].dropna(subset=[col]).copy()
+        df = self._apply_median_filter(self._active_t4_df)
+        df = df[[col] + ([grp_col] if grp_col else [])].dropna(subset=[col]).copy()
+    
         if self.dist_logx.get():
             df = df[df[col] > 0]
             df[col] = np.log(df[col])
@@ -1166,6 +1188,29 @@ class SpectroViewer(tk.Tk):
             canvas.draw()
         except Exception as e:
             messagebox.showerror("Spectrogram Error", str(e))
+    
+    def _median_filter_bar(self, parent: tk.Frame) -> tk.Frame:
+        """Build the shared median filtering control bar."""
+        tax_cols = [c for c in ["species", "gen", "family"] if c in self.df.columns]
+
+        bar = tk.LabelFrame(parent, text=" Median Filtering ", fg=self.ACC, bg=self.BG,
+                            font=("Helvetica", 9, "bold"), padx=6, pady=4)
+        bar.pack(fill="x", padx=14, pady=(4, 0))
+
+        tk.Checkbutton(bar, text="Median sample per individual",
+                    variable=self.median_ind,
+                    fg=self.FG, bg=self.BG, selectcolor=self.SURF,
+                    activebackground=self.BG).pack(side="left", padx=(0, 12))
+
+        tk.Checkbutton(bar, text="Median individual per taxon:",
+                    variable=self.median_tax,
+                    fg=self.FG, bg=self.BG, selectcolor=self.SURF,
+                    activebackground=self.BG).pack(side="left")
+
+        ttk.Combobox(bar, textvariable=self.median_tax_col,
+                    values=tax_cols, width=10).pack(side="left", padx=4)
+
+        return bar
     
     def _play_audio(self, row, mode="segment"):
         """mode = 'segment' (full) or 'prediction' (box ± 10%)"""
@@ -1279,6 +1324,45 @@ class SpectroViewer(tk.Tk):
         elif args[0] == "scroll":
             amount = int(args[1]) * 2   # pas de 2
             self.cm_listbox.yview_scroll(amount, args[2])
+
+    def _apply_median_filter(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Apply median-based filtering to reduce the dataset.
+
+        - median_ind: keep only the sample closest to the median metric
+        per individual (identified by file_name_radical)
+        - median_tax: keep only the individual closest to the median metric
+        per taxonomic level (one row per unique value of median_tax_col)
+
+        Both can be combined — individual filtering is applied first.
+        """
+
+        m = self.metric_col
+        if m not in df.columns or df[m].isna().all():
+            print(f"Metric column '{m}' not found or all NaN. Skipping median filter.")
+            return df
+
+        def _median_indices(data, group_col):
+            # Filter out groups with all NaN in the metric column
+            valid_groups = data.dropna(subset=[m])
+            if valid_groups.empty:
+                print(f"No valid groups found for median filtering by '{group_col}'.")
+                return []
+            return (valid_groups.groupby(group_col, group_keys=False)
+                        .apply(lambda g: g.loc[[( g[m] - g[m].median()).abs().idxmin()]])
+                        .index)
+
+        if self.median_ind.get() and "file_name_radical" in df.columns:
+            idx = _median_indices(df, "file_name_radical")
+            df  = df.loc[idx].reset_index(drop=True)
+
+        if self.median_tax.get():
+            col = self.median_tax_col.get()
+            if col and col in df.columns:
+                idx = _median_indices(df, col)
+                df  = df.loc[idx].reset_index(drop=True)
+
+        return df
 # ─────────────────────────────────────────────
 # Public entry point
 # ─────────────────────────────────────────────
