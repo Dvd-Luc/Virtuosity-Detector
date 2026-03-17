@@ -259,27 +259,72 @@ class SpectroViewer(tk.Tk):
 
         # ── Criterion row ──
         ctrl = tk.Frame(self.t2, bg=self.BG); ctrl.pack(fill="x", padx=14, pady=(6, 2))
-        tk.Label(ctrl, text="Criterion:", fg=self.FG2, bg=self.BG).pack(side="left")
+
         self.crit = tk.StringVar(value="top_n_high")
-        for v, t in [("top_n_high", "Top N highest"),
-                    ("top_n_low",  "Top N lowest"),
-                    ("threshold",  "Threshold filter"),
-                    ("taxon_list", "Taxon list")]:
-            tk.Radiobutton(ctrl, text=t, variable=self.crit, value=v,
+
+        # ── Bloc 1 : Top N ──────────────────────────────────────────────────────
+        block1 = tk.LabelFrame(ctrl, text=" Top N ", fg=self.ACC, bg=self.BG,
+                                font=("Helvetica", 9, "bold"), padx=6, pady=4)
+        block1.pack(side="left", padx=(0, 8))
+
+        for v, t in [("top_n_high", "N highest"), ("top_n_low", "N lowest")]:
+            tk.Radiobutton(block1, text=t, variable=self.crit, value=v,
                         command=self._t2_toggle,
                         fg=self.FG, bg=self.BG, selectcolor=self.SURF,
-                        activebackground=self.BG).pack(side="left", padx=6)
+                        activebackground=self.BG).pack(side="left", padx=4)
 
-        param_frame = tk.Frame(ctrl, bg=self.BG); param_frame.pack(side="left", padx=10)
-
-        self.tnf = tk.Frame(param_frame, bg=self.BG); self.tnf.pack(side="left")
+        self.tnf = tk.Frame(block1, bg=self.BG)
+        self.tnf.pack(side="left", padx=(6, 0))
         tk.Label(self.tnf, text="N:", fg=self.FG2, bg=self.BG).pack(side="left")
         self.nvar = tk.IntVar(value=10)
-        tk.Spinbox(self.tnf, from_=1, to=4000, textvariable=self.nvar, width=5,
+        tk.Spinbox(self.tnf, from_=1, to=9999, textvariable=self.nvar, width=5,
                 bg=self.SURF, fg=self.FG, insertbackground="white",
                 buttonbackground=self.SURF).pack(side="left")
 
-        self.thf = tk.Frame(param_frame, bg=self.BG)
+        # Taxonomic filter with tooltip
+        tax_cols = [c for c in ["species", "gen", "family"] if c in self.df.columns]
+        tax_row  = tk.Frame(block1, bg=self.BG); tax_row.pack(side="left", padx=(10, 0))
+        tk.Label(tax_row, text="Taxonomic filter:", fg=self.FG2, bg=self.BG).pack(side="left")
+
+        # "?" tooltip button
+        help_btn = tk.Label(tax_row, text=" ? ", fg=self.ACC, bg=self.SURF,
+                            font=("Helvetica", 8, "bold"), cursor="hand2",
+                            relief="flat", padx=3)
+        help_btn.pack(side="left", padx=2)
+
+        def _show_tooltip(event, widget=help_btn):
+            tip = tk.Toplevel(widget)
+            tip.wm_overrideredirect(True)
+            tip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 4}")
+            tk.Label(tip,
+                    text=("If set, applies Top N independently per taxon value.\n"
+                        "Example: N=3 + species → top 3 samples per species."),
+                    fg=self.FG, bg=self.SURF, font=("Helvetica", 9),
+                    padx=8, pady=6, relief="solid", borderwidth=1,
+                    justify="left").pack()
+            tip._widget = widget
+            def _hide(e): tip.destroy()
+            tip.bind("<Leave>", _hide)
+            widget.bind("<Leave>", _hide)
+
+        help_btn.bind("<Enter>", _show_tooltip)
+
+        self.best_per_var = tk.StringVar(value="")
+        self.best_per_cb  = ttk.Combobox(tax_row, textvariable=self.best_per_var,
+                                        values=[""] + tax_cols, width=10)
+        self.best_per_cb.pack(side="left", padx=4)
+
+        # ── Bloc 2 : Threshold ───────────────────────────────────────────────────
+        block2 = tk.LabelFrame(ctrl, text=" Threshold ", fg=self.ACC, bg=self.BG,
+                                font=("Helvetica", 9, "bold"), padx=6, pady=4)
+        block2.pack(side="left", padx=8)
+
+        tk.Radiobutton(block2, text="Threshold filter", variable=self.crit, value="threshold",
+                    command=self._t2_toggle,
+                    fg=self.FG, bg=self.BG, selectcolor=self.SURF,
+                    activebackground=self.BG).pack(side="left", padx=4)
+
+        self.thf = tk.Frame(block2, bg=self.BG); self.thf.pack(side="left")
         self.opv = tk.StringVar(value=">")
         ttk.Combobox(self.thf, textvariable=self.opv,
                     values=[">", "<", ">=", "<="], width=4).pack(side="left")
@@ -287,28 +332,27 @@ class SpectroViewer(tk.Tk):
         tk.Entry(self.thf, textvariable=self.tv, width=8,
                 bg=self.SURF, fg=self.FG, insertbackground="white").pack(side="left", padx=4)
 
-        tax_cols = [c for c in ["species", "gen", "family"] if c in self.df.columns]
-        self.taxf = tk.Frame(param_frame, bg=self.BG)
+        # ── Bloc 3 : Taxon list ──────────────────────────────────────────────────
+        block3 = tk.LabelFrame(ctrl, text=" Taxon list ", fg=self.ACC, bg=self.BG,
+                                font=("Helvetica", 9, "bold"), padx=6, pady=4)
+        block3.pack(side="left", padx=8)
+
+        tk.Radiobutton(block3, text="Taxon list", variable=self.crit, value="taxon_list",
+                    command=self._t2_toggle,
+                    fg=self.FG, bg=self.BG, selectcolor=self.SURF,
+                    activebackground=self.BG).pack(side="left", padx=4)
+
+        self.taxf = tk.Frame(block3, bg=self.BG); self.taxf.pack(side="left")
         tk.Label(self.taxf, text="Level:", fg=self.FG2, bg=self.BG).pack(side="left")
         self.tax_level_t2 = tk.StringVar(value=tax_cols[0] if tax_cols else "")
         ttk.Combobox(self.taxf, textvariable=self.tax_level_t2,
                     values=tax_cols, width=10).pack(side="left", padx=4)
         tk.Label(self.taxf, text="Value:", fg=self.FG2, bg=self.BG).pack(side="left")
         self.tax_value_t2    = tk.StringVar(value="")
-        self.tax_value_cb_t2 = ttk.Combobox(self.taxf, textvariable=self.tax_value_t2, width=30)
+        self.tax_value_cb_t2 = ttk.Combobox(self.taxf, textvariable=self.tax_value_t2, width=25)
         self.tax_value_cb_t2.pack(side="left", padx=4)
         self.tax_level_t2.trace_add("write", lambda *_: self._t2_update_tax_values())
         self._t2_update_tax_values()
-
-        # ── Taxonomic filter row (visible only for top_n) ──
-        tax_row = tk.Frame(self.t2, bg=self.BG); tax_row.pack(fill="x", padx=14, pady=(0, 2))
-        tk.Label(tax_row, text="Taxonomic filter:", fg=self.FG2, bg=self.BG).pack(side="left")
-        self.best_per_var = tk.StringVar(value="")
-        self.best_per_cb  = ttk.Combobox(tax_row, textvariable=self.best_per_var,
-                                        values=[""] + tax_cols, width=12)
-        self.best_per_cb.pack(side="left", padx=4)
-        tk.Label(tax_row, text="→ keep top N per taxon value",
-                fg=self.FG2, bg=self.BG, font=("Helvetica", 8)).pack(side="left")
 
         # ── Action row ──
         ctrl2 = tk.Frame(self.t2, bg=self.BG); ctrl2.pack(fill="x", padx=14, pady=(2, 6))
@@ -356,19 +400,11 @@ class SpectroViewer(tk.Tk):
         #         command=sd.stop).pack(side="left", padx=6)
 
     def _t2_toggle(self):
-        crit = self.crit.get()
-        self.tnf.pack_forget()
-        self.thf.pack_forget()
-        self.taxf.pack_forget()
-        if crit in ("top_n_high", "top_n_low"):
-            self.tnf.pack(side="left")
-        elif crit == "threshold":
-            self.thf.pack(side="left", padx=4)
-        elif crit == "taxon_list":
-            self.taxf.pack(side="left")
-        # Taxonomic filter only makes sense for top_n
+        crit  = self.crit.get()
         state = "normal" if crit in ("top_n_high", "top_n_low") else "disabled"
         self.best_per_cb.config(state=state)
+        if state == "disabled":
+            self.best_per_var.set("")
 
     @property
     def _active_t2_df(self):
@@ -454,7 +490,9 @@ class SpectroViewer(tk.Tk):
     def _t2_update_tax_values(self):
         col = self.tax_level_t2.get()
         if col and col in self.df.columns:
-            counts = self.df[col].value_counts()
+            m      = self.metric_col
+            df_valid = self.df.dropna(subset=[m]) if m in self.df.columns else self.df
+            counts = df_valid[col].value_counts()
             vals   = [""] + [f"{v}  ({counts.get(v, 0)})"
                             for v in sorted(self.df[col].dropna().unique().tolist())]
             self.tax_value_cb_t2["values"] = vals
