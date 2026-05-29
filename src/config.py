@@ -21,6 +21,7 @@ class TrillConfig:
     yolo_dataset_subdir: str = "yolo_dataset"
 
     # File names
+    dataset_csv: str = "full_dataset_with_biogeographical.csv"
     output_csv: str = "counting_annotations.csv"
     test_csv: str = "test_annotations.csv"
     selected_detection_model: str = "best.pt"
@@ -80,6 +81,7 @@ class TrillConfig:
         self.models_subdir = os.path.join(self.root_dir, self.models_subdir)
         self.temp_subdir = os.path.join(self.root_dir, self.temp_subdir)
         # Fichiers
+        self.dataset_csv = os.path.join(self.data_processed_subdir, self.dataset_csv)
         self.output_csv = os.path.join(self.data_processed_subdir, self.output_csv)
         self.test_csv = os.path.join(self.data_processed_subdir, self.test_csv)
 

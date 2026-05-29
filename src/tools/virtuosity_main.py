@@ -13,7 +13,7 @@ from plotly.subplots import make_subplots
 from src.config import load_config_yaml
 from src.main import visualize_and_confirm_predictions
 from src.utils.gui_visualizer import launch_gui
-from src.utils.metrics import upper_bound_regression, distance_to_upper_bound, bill_centroid
+from src.utils.metrics import performance_orientation, upper_bound_regression, distance_to_upper_bound, bill_centroid
 
 def visualize_best_virtuosity_samples(df, config, x_col="trill_rate", y_col="bandwidth", sorting_metric="dist_to_bound", bin_width=2.0, top_n=5, plot=False):
     df_plot = df.dropna(subset=[sorting_metric])
@@ -175,7 +175,10 @@ def prepare_dataset(df):
         lambda row: 0 if row["trill_duration"] == 0 else row["count"] / row["trill_duration"],
         axis=1
     )
+    df["trill_rate_standardized"] = (df["trill_rate"] - df["trill_rate"].mean()) / df["trill_rate"].std()
+
     df["bandwidth"] = df["f_max"] - df["f_min"]
+    df["bandwidth_standardized"] = (df["bandwidth"] - df["bandwidth"].mean()) / df["bandwidth"].std()
     df["bandwidth_podos"] = df["f_max_podos"] - df["f_min_podos"]
 
     # df_filtered = df[df["trill_rate"] >= 2]
@@ -214,6 +217,9 @@ def prepare_dataset(df):
         y_col="bandwidth_podos",
         signed=True
     )
+
+    vocal_deviation_metrics = performance_orientation(df_filtered, reg, x_col="trill_rate", y_col="bandwidth", log_y=False)
+    df_filtered = pd.concat([df_filtered, vocal_deviation_metrics], axis=1)
 
     regression_results = {
         "reg": reg,
@@ -267,18 +273,20 @@ def load_meta_and_morpho(DATA_DIR, file_timestamps, file_meta, file_morpho):
 def main():
 
     config = load_config_yaml(yaml_path="config.yaml")
+    if config.dataset_csv is not None:
+        df_merged = pd.read_csv(os.path.join(config.data_processed_subdir, config.dataset_csv))
+    else:
+        pred_annotation_file = "trills_11032026_predictions.csv"#"annotations_trills_v2_tests_predictions.csv"
+        file_timestamps = "segments_passerines_filtered.csv"
+        file_meta = "traits_data_pc_gmm_8components_proba_filtered.csv"
+        file_morpho = "model_traits_morpho_social_data.csv"
 
-    pred_annotation_file = "trills_11032026_predictions.csv"#"annotations_trills_v2_tests_predictions.csv"
-    file_timestamps = "segments_passerines_filtered.csv"
-    file_meta = "traits_data_pc_gmm_8components_proba_filtered.csv"
-    file_morpho = "model_traits_morpho_social_data.csv"
+        df_pred = pd.read_csv(os.path.join(config.data_processed_subdir, pred_annotation_file))
 
-    df_pred = pd.read_csv(os.path.join(config.data_processed_subdir, pred_annotation_file))
-
-    df_pred_filtered, regression_results = prepare_dataset(df_pred)
-    
-    df_merged = load_meta_and_morpho(config.data_raw_subdir, file_timestamps, file_meta, file_morpho)
-    df_merged = pd.merge(df_pred_filtered, df_merged, on="file_name", how="inner")
+        df_pred_filtered, regression_results = prepare_dataset(df_pred)
+        
+        df_merged = load_meta_and_morpho(config.data_raw_subdir, file_timestamps, file_meta, file_morpho)
+        df_merged = pd.merge(df_pred_filtered, df_merged, on="file_name", how="inner")
 
     print("\n" + "="*70)
     print("WORKFLOW OPTIONS")
@@ -335,7 +343,7 @@ def main():
         
     elif choice == "4":
         df_out = df_merged.copy()
-        output_final = os.path.join(config.data_processed_subdir, "final_virtuosity_dataset_v3.csv")
+        output_final = os.path.join(config.data_processed_subdir, "full_dataset_prediction.csv")
         os.makedirs(os.path.dirname(output_final), exist_ok=True)
         df_out.to_csv(output_final, index=False)
 
