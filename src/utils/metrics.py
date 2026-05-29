@@ -126,6 +126,64 @@ def distance_to_upper_bound(
         return d
     else:
         return np.abs(d)
+    
+def performance_orientation(df, reg, x_col="trill_rate", y_col="bandwidth", log_y=False):
+    """
+    Decompose performance into BW-oriented vs TR-oriented components.
+    
+    Returns a DataFrame with:
+    - vd_total     : vocal deviation (perpendicular distance, as before)
+    - delta_bw     : standardized residual on BW axis (how much BW exceeds prediction)
+    - delta_tr     : standardized residual on TR axis (how much TR exceeds prediction)
+    - orientation_ratio : delta_bw / (|delta_bw| + |delta_tr|), [-1, 1]
+                          > 0  → BW-oriented
+                          < 0  → TR-oriented
+    - theta        : angle in degrees (atan2), same interpretation
+    """
+    x = df[x_col].values
+    y = df[y_col].values
+
+    if log_y:
+            y = np.log(y + 1e-9)
+
+    x_sd, x_mean = df[x_col].std(), df[x_col].mean()
+    y_sd, y_mean = df[y_col].std(), df[y_col].mean()
+
+    x_std = (x - x_mean) / x_sd +2
+    y_std = (y - y_mean) / y_sd +2
+
+    a = reg["slope"]
+    b = reg["intercept"]
+
+    a_std = a * (x_sd / y_sd)
+    b_std = (a * x_mean + b - y_mean) / y_sd
+
+    # Residual on BW axis: how far above/below the predicted BW
+    y_pred_std = a_std * x_std + b_std
+    delta_bw = y_std - y_pred_std  # > 0 = above the line (better BW than expected)
+
+    # Residual on TR axis: how far right/left of where BW would predict TR
+    # i.e. invert the line: x = (y - b) / a
+    x_pred_std = (y_std - b_std) / a_std
+    delta_tr = x_std - x_pred_std  # > 0 = more TR than BW would predict
+
+    # Orientation
+    denom = np.abs(y_std) + np.abs(x_std)
+    orientation_ratio = np.where(denom > 0, y_std / denom, 0.0)
+    theta = np.degrees(np.arctan2(y_std, x_std))
+
+    # Vocal deviation (your existing metric, for reference)
+    vd = np.abs(a * x - y + b) / np.sqrt(a**2 + 1)
+    vd_std = np.abs(a_std * x_std - y_std + b_std) / np.sqrt(a_std**2 + 1)
+
+    return pd.DataFrame({
+        "vd_total": vd,
+        "vd_std": vd_std,
+        "delta_bw": delta_bw,
+        "delta_tr": delta_tr,
+        "orientation_ratio": orientation_ratio,
+        "theta": theta
+    }, index=df.index) 
 
 
 def bill_centroid(df):
@@ -137,3 +195,4 @@ def bill_centroid(df):
     log_centroid = np.log(centroid)
 
     return centroid, log_centroid
+
