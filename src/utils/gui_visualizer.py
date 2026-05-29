@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import librosa
 import matplotlib
+import matplotlib.cm as cm
 import sounddevice as sd
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -597,6 +598,38 @@ class SpectroViewer(tk.Tk):
         self.t3_subset_lbl = tk.Label(pick, text="Full dataset", fg=self.FG2, bg=self.BG)
         self.t3_subset_lbl.pack(side="left", padx=8)
 
+        # ── Regression controls ──
+        reg_bar = tk.LabelFrame(self.t3, text=" Regression Lines ", fg=self.ACC, bg=self.BG,
+                                font=("Helvetica", 9, "bold"), padx=6, pady=4)
+        reg_bar.pack(fill="x", padx=14, pady=(4, 0))
+
+        tax_cols = [c for c in ["species", "gen", "family"] if c in self.df.columns]
+
+        self.reg_global   = tk.BooleanVar(value=True)
+        self.reg_tax      = tk.BooleanVar(value=False)
+        self.reg_tax_col  = tk.StringVar(value=tax_cols[0] if tax_cols else "")
+        self.reg_min_n    = tk.IntVar(value=5)
+        self.reg_ci       = tk.BooleanVar(value=False)
+
+        tk.Checkbutton(reg_bar, text="Global regression", variable=self.reg_global,
+                    fg=self.FG, bg=self.BG, selectcolor=self.SURF,
+                    activebackground=self.BG).pack(side="left", padx=(0, 12))
+
+        tk.Checkbutton(reg_bar, text="Regression by:", variable=self.reg_tax,
+                    fg=self.FG, bg=self.BG, selectcolor=self.SURF,
+                    activebackground=self.BG).pack(side="left")
+        ttk.Combobox(reg_bar, textvariable=self.reg_tax_col,
+                    values=tax_cols, width=10).pack(side="left", padx=4)
+
+        tk.Label(reg_bar, text="min n:", fg=self.FG2, bg=self.BG).pack(side="left", padx=(12, 2))
+        tk.Spinbox(reg_bar, from_=1, to=999, textvariable=self.reg_min_n, width=4,
+                bg=self.SURF, fg=self.FG, insertbackground="white",
+                buttonbackground=self.SURF).pack(side="left")
+
+        tk.Checkbutton(reg_bar, text="Show 95% CI", variable=self.reg_ci,
+                    fg=self.FG, bg=self.BG, selectcolor=self.SURF,
+                    activebackground=self.BG).pack(side="left", padx=(12, 0))
+
         self._median_filter_bar(self.t3)
 
         self.fig3, self.ax3 = plt.subplots(figsize=(10, 3.4), facecolor=self.BG2)
@@ -615,6 +648,7 @@ class SpectroViewer(tk.Tk):
         #         command=sd.stop).pack(side="left", padx=6)
 
     def _t3_plotly(self):
+        print("Generating Plotly figure...")
         x, y = self._sx.get(), self._sy.get()
         color = self._sc.get() or None
         size  = self._ss.get() or None
@@ -645,7 +679,7 @@ class SpectroViewer(tk.Tk):
                         x=x, 
                         y=y,
                         color=color, 
-                        color_continuous_scale="Viridis" if color_continuous else None,
+                        color_continuous_scale="Plasma_r" if color_continuous else None,
                         color_discrete_sequence=px.colors.qualitative.Pastel if not color_continuous else None,
                         size=size,
                         hover_name="_idx",       
@@ -663,8 +697,11 @@ class SpectroViewer(tk.Tk):
                     x=x,
                     y=y,
                     color=color,
-                    color_continuous_scale="Viridis" if color_continuous else None,
-                    color_discrete_sequence=px.colors.qualitative.Set2 if not color_continuous else None,
+                    color_continuous_scale="Plasma_r" if color_continuous else None,
+                    color_discrete_sequence=(
+                        ["#555555"] if (not color and not color_continuous)
+                        else (px.colors.qualitative.Set2 if not color_continuous else None)
+                    ),
                     size=size,
                     hover_name="_idx",
                     hover_data=hover,
@@ -675,16 +712,31 @@ class SpectroViewer(tk.Tk):
             fig.update_traces(marker=dict(size=6 if not size else None,
                                         line=dict(width=0.5, color="#ffffff")))
             fig.update_layout(
-                paper_bgcolor="#d9d2d2",   # gris très clair pour le fond extérieur
-                plot_bgcolor="#d9d2d2",    # blanc pur pour la zone du graphe
+                paper_bgcolor="#ffffff",   # gris très clair pour le fond extérieur
+                plot_bgcolor="#ffffff",    # blanc pur pour la zone du graphe
                 font=dict(color="#333333"),
-                title_font=dict(color="#1a1a2e"),
+                title_font=dict(color="#1a1a2e", size=30, family="Arial Black"),
                 hoverlabel=dict(bgcolor="#e8e8f0", font_color="#1a1a2e",
                                 bordercolor="#aaaacc"),
             )
-            fig.update_xaxes(gridcolor="#AAA5A5", zerolinecolor="#585353")
-            fig.update_yaxes(gridcolor="#AAA5A5", zerolinecolor="#585353")
-        
+            fig.update_xaxes(
+                gridcolor="#AAA5A5", zerolinecolor="#585353",
+                title_font=dict(size=24, color="#1a1a2e"),
+                tickfont=dict(size=18, color="#333333"),
+            )
+            fig.update_yaxes(
+                gridcolor="#AAA5A5", zerolinecolor="#585353",
+                title_font=dict(size=24, color="#1a1a2e"),
+                tickfont=dict(size=18, color="#333333"),
+            )
+        fig.update_layout(legend=dict(
+                    font=dict(size=24),
+                    orientation="h",      # légende horizontale
+                    yanchor="bottom",
+                    y=1.02,               # au-dessus du plot
+                    xanchor="right",
+                    x=1
+                ),)
         # Upper bound regression (max per bin + linear fit)
         if self.ub_var.get():
             ub_df, reg = upper_bound_regression(
@@ -711,6 +763,38 @@ class SpectroViewer(tk.Tk):
             fig.add_scatter(x=x_line, y=y_line,
                             mode="lines", name=label,
                             line=dict(color="#f38ba8", width=2, dash="dash"))
+            
+        # ── Regression lines ────────────────────────────────────────────────────
+        palette_reg = px.colors.qualitative.Bold
+        show_ci     = self.reg_ci.get()
+
+        if self.reg_global.get():
+            print("Adding global regression...")
+            self._add_regression_traces(
+                fig, df, x, y,
+                label="Global",
+                color="#ffffff" if self.theme_var.get() == "dark" else "#222222",
+                show_ci=show_ci,
+            )
+
+        if self.reg_tax.get():
+            print("Adding taxonomic regression...")
+            tax_col = self.reg_tax_col.get()
+            min_n   = self.reg_min_n.get()
+            if tax_col and tax_col in df.columns:
+                groups = df[tax_col].dropna().unique()
+                # Filter groups with enough points
+                valid_groups = [g for g in groups
+                                if df[df[tax_col] == g][[x, y]].dropna().__len__() >= min_n]
+                for i, grp in enumerate(sorted(valid_groups)):
+                    sub   = df[df[tax_col] == grp]
+                    color = palette_reg[i % len(palette_reg)]
+                    self._add_regression_traces(
+                        fig, sub, x, y,
+                        label=str(grp),
+                        color=color,
+                        show_ci=show_ci,
+                    )
         self._plotly_df = df.reset_index(drop=True)
         tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False)
         html = fig.to_html(include_plotlyjs="cdn")
@@ -1324,6 +1408,53 @@ class SpectroViewer(tk.Tk):
         elif args[0] == "scroll":
             amount = int(args[1]) * 2   # pas de 2
             self.cm_listbox.yview_scroll(amount, args[2])
+
+    def _add_regression_traces(self, fig, df, x, y, label, color, show_ci, xref="x", yref="y"):
+        """Add OLS regression line and optional 95% CI band to fig for a subset df."""
+        from scipy.stats import t as t_dist
+
+        sub = df[[x, y]].dropna()
+        if len(sub) < 3:
+            return
+
+        x_arr = sub[x].values
+        y_arr = sub[y].values
+        res   = linregress(x_arr, y_arr)
+
+        x_line = np.linspace(x_arr.min(), x_arr.max(), 200)
+        y_line = res.slope * x_line + res.intercept
+
+        fig.add_scatter(
+            x=x_line, y=y_line,
+            mode="lines",
+            name=f"{label} (r={res.rvalue:.2f}, p={res.pvalue:.2e}, n={len(sub)})",
+            line=dict(color=color, width=2),
+            hoverinfo="skip",
+            xaxis=xref, yaxis=yref,
+            showlegend=True
+        )
+
+        if show_ci:
+            n      = len(sub)
+            x_mean = x_arr.mean()
+            se     = res.stderr
+            s_err  = np.sqrt(np.sum((y_arr - (res.slope * x_arr + res.intercept))**2) / (n - 2))
+            t_val  = t_dist.ppf(0.975, df=n - 2)
+            ci     = t_val * s_err * np.sqrt(1/n + (x_line - x_mean)**2 /
+                                            np.sum((x_arr - x_mean)**2))
+
+            r, g_c, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+            fig.add_scatter(
+                x=np.concatenate([x_line, x_line[::-1]]),
+                y=np.concatenate([y_line - ci, (y_line + ci)[::-1]]),
+                fill="toself",
+                fillcolor=f"rgba({r},{g_c},{b},0.15)",
+                line=dict(color="rgba(0,0,0,0)"),
+                name=f"{label} (95% CI)",
+                hoverinfo="skip",
+                showlegend=True,
+                xaxis=xref, yaxis=yref,
+            )
 
     def _apply_median_filter(self, df: pd.DataFrame) -> pd.DataFrame:
         """
