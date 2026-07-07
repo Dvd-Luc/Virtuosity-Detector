@@ -22,7 +22,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import linregress, pearsonr, spearmanr
-from src.utils.metrics import upper_bound_regression
+from src.utils.metrics import upper_bound_regression, quantile_upper_bound, distance_to_upper_bound, performance_orientation
 
 
 def load_spectrogram(row, config):
@@ -574,6 +574,29 @@ class SpectroViewer(tk.Tk):
         tk.Label(ctrl, text="Theme:", fg=self.FG2, bg=self.BG).pack(side="left", padx=(16,2))
         ttk.Combobox(ctrl, textvariable=self.theme_var, values=["dark", "light"], width=8).pack(side="left")
 
+        tk.Label(ctrl, text="Highlight taxon:", fg=self.FG2, bg=self.BG).pack(side="left", padx=(16, 2))
+        tax_cols_t3 = [c for c in ["species", "gen", "family"] if c in self.df.columns]
+        self.hl_tax_level = tk.StringVar(value="")
+        self.hl_tax_val   = tk.StringVar(value="")
+
+        hl_level_cb = ttk.Combobox(ctrl, textvariable=self.hl_tax_level,
+                                    values=[""] + tax_cols_t3, width=10)
+        hl_level_cb.pack(side="left")
+
+        self.hl_val_cb = ttk.Combobox(ctrl, textvariable=self.hl_tax_val, width=18)
+        self.hl_val_cb.pack(side="left", padx=(2, 0))
+
+        def _update_hl_values(*_):
+            col = self.hl_tax_level.get()
+            if col and col in self.df.columns:
+                vals = [""] + sorted(self.df[col].dropna().unique().tolist())
+                self.hl_val_cb["values"] = vals
+            else:
+                self.hl_val_cb["values"] = [""]
+            self.hl_tax_val.set("")
+
+        hl_level_cb.bind("<<ComboboxSelected>>", _update_hl_values)
+
         tk.Label(self.t3,
                 text="Click 'Open Plotly →' → hover a point to get its index → enter it below.",
                 fg=self.FG2, bg=self.BG, font=("Helvetica", 9)).pack(anchor="w", padx=16)
@@ -654,48 +677,125 @@ class SpectroViewer(tk.Tk):
         size  = self._ss.get() or None
 
         color_continuous = False
-
         if color and color in self.df.columns:
             if pd.api.types.is_numeric_dtype(self.df[color]):
                 color_continuous = True
 
-
         if x not in self.df.columns or y not in self.df.columns:
             messagebox.showerror("Error", f"Columns not found: {x}, {y}"); return
-        source = self._t3_df if self._t3_df is not None else self.df
 
-        
+        source = self._t3_df if self._t3_df is not None else self.df
         df = self._apply_median_filter(source)
         df = df.dropna(subset=[x, y, "file_name_radical", "segment_id"]).copy()
 
-        df["_idx"] = np.arange(len(df))          
+        df["_idx"]   = np.arange(len(df))
         df["_label"] = df["file_name_radical"].astype(str) + "_seg" + df["segment_id"].astype(str)
         hover = [c for c in ["_label", "species", "genus", "family", self.metric_col]
                 if c in df.columns and c not in [x, y]]
-        
-        
-        if self.theme_var.get() == "dark":
-            fig = px.scatter(df, 
-                        x=x, 
-                        y=y,
-                        color=color, 
-                        color_continuous_scale="Plasma_r" if color_continuous else None,
-                        color_discrete_sequence=px.colors.qualitative.Pastel if not color_continuous else None,
-                        size=size,
-                        hover_name="_idx",       
-                        hover_data=hover,
-                        template="plotly_dark", title=f"{y}  vs  {x}",
-                        labels={x: x.replace("_"," ").title(), y: y.replace("_"," ").title()},
-                        opacity=0.5,
-                        log_y=self.ub_logy.get())
-            fig.update_traces(marker=dict(size=6 if not size else None, line=dict(width=0)))
-            fig.update_layout(paper_bgcolor="#1e1e2e", plot_bgcolor="#181825",
-                            hoverlabel=dict(bgcolor="#313244", font_color="#cdd6f4"))
-        
-        else :
-            fig = px.scatter(df,
-                    x=x,
-                    y=y,
+
+        # ── Highlight setup ──────────────────────────────────────────────────────
+        hl_col = self.hl_tax_level.get()
+        hl_val = self.hl_tax_val.get()
+        has_highlight = bool(hl_col and hl_val and hl_col in df.columns)
+
+        dark       = self.theme_var.get() == "dark"
+        template   = "plotly_dark"  if dark else "plotly_white"
+        paper_bg   = "#1e1e2e"      if dark else "#ffffff"
+        plot_bg    = "#181825"      if dark else "#ffffff"
+        bg_color   = "rgba(150,150,170,0.25)" if dark else "rgba(160,160,160,0.30)"
+        hl_color   = "#f38ba8"
+
+        if has_highlight:
+            mask  = df[hl_col] == hl_val
+            df_bg = df[~mask]
+            df_hl = df[mask]
+
+            fig = go.Figure()
+
+            # Background points — greyed out
+            fig.add_trace(go.Scatter(
+                x=df_bg[x], y=df_bg[y],
+                mode="markers",
+                name="Other",
+                marker=dict(color=bg_color, size=5, line=dict(width=0)),
+                customdata=df_bg[["_idx"] + [c for c in hover if c in df_bg.columns]].values,
+                hovertemplate="<b>%{customdata[0]}</b><br>" + x + "=%{x}<br>" + y + "=%{y}<extra>Other</extra>",
+                showlegend=True,
+            ))
+
+            # Highlighted points — coloured by `color` selector if set, otherwise flat pink
+            if color and color in df_hl.columns:
+                for i, grp_val in enumerate(sorted(df_hl[color].dropna().unique())):
+                    sub_hl = df_hl[df_hl[color] == grp_val]
+                    fig.add_trace(go.Scatter(
+                        x=sub_hl[x], y=sub_hl[y],
+                        mode="markers",
+                        name=str(grp_val),
+                        marker=dict(size=8, line=dict(width=0.5,
+                                    color="#ffffff" if dark else "#333333")),
+                        customdata=sub_hl[["_idx"] + [c for c in hover if c in sub_hl.columns]].values,
+                        hovertemplate=(
+                            "<b>%{customdata[0]}</b><br>"
+                            + x + "=%{x}<br>" + y + "=%{y}"
+                            + f"<extra>{grp_val}</extra>"
+                        ),
+                        showlegend=True,
+                    ))
+            else:
+                fig.add_trace(go.Scatter(
+                    x=df_hl[x], y=df_hl[y],
+                    mode="markers",
+                    name=f"{hl_col}={hl_val}",
+                    marker=dict(color=hl_color, size=8,
+                                line=dict(width=0.5, color="#ffffff" if dark else "#333333")),
+                    customdata=df_hl[["_idx"] + [c for c in hover if c in df_hl.columns]].values,
+                    hovertemplate=(
+                        "<b>%{customdata[0]}</b><br>"
+                        + x + "=%{x}<br>" + y + "=%{y}"
+                        + f"<extra>{hl_col}={hl_val}</extra>"
+                    ),
+                    showlegend=True,
+                ))
+
+            fig.update_layout(
+                template=template,
+                title=f"{y}  vs  {x}  —  highlighted: {hl_col}={hl_val}  (n={len(df)})",
+                xaxis_title=x.replace("_", " ").title(),
+                yaxis_title=y.replace("_", " ").title(),
+                paper_bgcolor=paper_bg,
+                plot_bgcolor=plot_bg,
+                hoverlabel=dict(
+                    bgcolor="#313244" if dark else "#e8e8f0",
+                    font_color="#cdd6f4" if dark else "#1a1a2e",
+                ),
+                yaxis_type="log" if self.ub_logy.get() else "linear",
+            )
+
+        else:
+            # ── Original px.scatter path (no highlight) ──────────────────────────
+            if dark:
+                fig = px.scatter(
+                    df, x=x, y=y,
+                    color=color,
+                    color_continuous_scale="Plasma_r" if color_continuous else None,
+                    color_discrete_sequence=px.colors.qualitative.Pastel if not color_continuous else None,
+                    size=size,
+                    hover_name="_idx",
+                    hover_data=hover,
+                    template="plotly_dark",
+                    title=f"{y}  vs  {x}",
+                    labels={x: x.replace("_", " ").title(), y: y.replace("_", " ").title()},
+                    opacity=0.5,
+                    log_y=self.ub_logy.get(),
+                )
+                fig.update_traces(marker=dict(size=6 if not size else None, line=dict(width=0)))
+                fig.update_layout(
+                    paper_bgcolor="#1e1e2e", plot_bgcolor="#181825",
+                    hoverlabel=dict(bgcolor="#313244", font_color="#cdd6f4"),
+                )
+            else:
+                fig = px.scatter(
+                    df, x=x, y=y,
                     color=color,
                     color_continuous_scale="Plasma_r" if color_continuous else None,
                     color_discrete_sequence=(
@@ -705,66 +805,118 @@ class SpectroViewer(tk.Tk):
                     size=size,
                     hover_name="_idx",
                     hover_data=hover,
-                    template="plotly_white", title=f"{y}  vs  {x}",
-                    labels={x: x.replace("_"," ").title(), y: y.replace("_"," ").title()},
+                    template="plotly_white",
+                    title=f"{y}  vs  {x}  (n={len(df)})",
+                    labels={x: x.replace("_", " ").title(), y: y.replace("_", " ").title()},
                     opacity=0.7,
-                    log_y=self.ub_logy.get())
-            fig.update_traces(marker=dict(size=6 if not size else None,
-                                        line=dict(width=0.5, color="#ffffff")))
-            fig.update_layout(
-                paper_bgcolor="#ffffff",   # gris très clair pour le fond extérieur
-                plot_bgcolor="#ffffff",    # blanc pur pour la zone du graphe
-                font=dict(color="#333333"),
-                title_font=dict(color="#1a1a2e", size=30, family="Arial Black"),
-                hoverlabel=dict(bgcolor="#e8e8f0", font_color="#1a1a2e",
-                                bordercolor="#aaaacc"),
-            )
-            fig.update_xaxes(
-                gridcolor="#AAA5A5", zerolinecolor="#585353",
-                title_font=dict(size=24, color="#1a1a2e"),
-                tickfont=dict(size=18, color="#333333"),
-            )
-            fig.update_yaxes(
-                gridcolor="#AAA5A5", zerolinecolor="#585353",
-                title_font=dict(size=24, color="#1a1a2e"),
-                tickfont=dict(size=18, color="#333333"),
-            )
-        fig.update_layout(legend=dict(
-                    font=dict(size=24),
-                    orientation="h",      # légende horizontale
-                    yanchor="bottom",
-                    y=1.02,               # au-dessus du plot
-                    xanchor="right",
-                    x=1
-                ),)
-        # Upper bound regression (max per bin + linear fit)
+                    log_y=self.ub_logy.get(),
+                )
+                fig.update_traces(marker=dict(size=6 if not size else None,
+                                            line=dict(width=0.5, color="#ffffff")))
+                fig.update_layout(
+                    paper_bgcolor="#ffffff",
+                    plot_bgcolor="#ffffff",
+                    font=dict(color="#333333"),
+                    title_font=dict(color="#1a1a2e", size=30, family="Arial Black"),
+                    hoverlabel=dict(bgcolor="#e8e8f0", font_color="#1a1a2e", bordercolor="#aaaacc"),
+                )
+                fig.update_xaxes(
+                    gridcolor="#AAA5A5", zerolinecolor="#585353",
+                    title_font=dict(size=24, color="#1a1a2e"),
+                    tickfont=dict(size=18, color="#333333"),
+                )
+                fig.update_yaxes(
+                    gridcolor="#AAA5A5", zerolinecolor="#585353",
+                    title_font=dict(size=24, color="#1a1a2e"),
+                    tickfont=dict(size=18, color="#333333"),
+                )
+
+        # ── Shared legend layout ─────────────────────────────────────────────────
+        fig.update_layout(
+            legend=dict(
+                font=dict(size=24),
+                orientation="h",
+                yanchor="bottom", y=1.02,
+                xanchor="right",  x=1,
+            ),
+            # width=1000, height=1000,
+        )
+
+        # ── Upper bound regression ───────────────────────────────────────────────
         if self.ub_var.get():
-            ub_df, reg = upper_bound_regression(
-                df, x_col=x, y_col=y,
-                bin_width=self.ub_bin.get(),
-                log_y=self.ub_logy.get()
-            )
-            # Points des maxima par bin
-            fig.add_scatter(x=ub_df[x], y=ub_df[y],
-                            mode="markers", name="UB points",
-                            marker=dict(color="#f38ba8", size=10, symbol="diamond"),
-                            hoverinfo="skip",
-                            hovertemplate=None,
-                            showlegend=True)
-            # Droite de régression
-            x_line = np.linspace(df[x].min(), df[x].max(), 200)
-            if self.ub_logy.get():
-                y_line = np.exp(reg["slope"] * x_line + reg["intercept"])
-            else:
-                y_line = reg["slope"] * x_line + reg["intercept"]
-            label = (f"UB fit  r={reg['r_value']:.3f}  "
-                    f"p={reg['p_value']:.3e}  "
-                    f"n={reg['n']}")
-            fig.add_scatter(x=x_line, y=y_line,
-                            mode="lines", name=label,
-                            line=dict(color="#f38ba8", width=2, dash="dash"))
-            
-        # ── Regression lines ────────────────────────────────────────────────────
+            def _add_ub(source_df, suffix="", color_pt="#5777ec", color_line="#5777ec", dash="dash"):
+                if len(source_df) < 3:
+                    return
+                # ub_df, reg = upper_bound_regression(
+                #     source_df, x_col=x, y_col=y,
+                #     bin_width=self.ub_bin.get(),
+                #     log_y=self.ub_logy.get(),
+                # )
+                # fig.add_scatter(
+                #     x=ub_df[x], y=ub_df[y],
+                #     mode="markers",
+                #     name=f"UB points{suffix}",
+                #     marker=dict(color=color_pt, size=10, symbol="diamond"),
+                #     hoverinfo="skip", hovertemplate=None, showlegend=True,
+                # )
+                # x_line = np.linspace(source_df[x].min(), source_df[x].max(), 200)
+                # y_line = (np.exp(reg["slope"] * x_line + reg["intercept"])
+                #         if self.ub_logy.get()
+                #         else reg["slope"] * x_line + reg["intercept"])
+                # label = (f"UB fit{suffix}  r={reg['r_value']:.3f}  "
+                #         f"p={reg['p_value']:.3e}  n={reg['n']}")
+                # fig.add_scatter(
+                #     x=x_line, y=y_line,
+                #     mode="lines", name=label,
+                #     line=dict(color=color_line, width=2, dash=dash),
+                # )
+
+                reg = quantile_upper_bound(
+                    source_df,
+                    x_col=x, y_col=y,
+                    quantile=0.90, x_min = 2,
+                    log_y=self.ub_logy.get(),
+                )
+
+                x_line = np.linspace(source_df[x].min(), source_df[x].max(), 200)
+                if self.ub_logy.get():
+                    y_line = np.exp(reg["intercept"] + reg["slope"] * x_line)
+                else:
+                    y_line = reg["intercept"] + reg["slope"] * x_line
+
+                # Label adapts to whichever method was used
+                if "r_value" in reg:
+                    label = (
+                        f"Upper-bound regression: y = {reg['intercept']:.2f} + {reg['slope']:.2f}*x"
+                        f" (R={reg['r_value']:.2f}, p={reg['p_value']:.3e})"
+                    )
+                else:
+                    label = (
+                        f"Quantile regression (q={reg['quantile']}): y = {reg['intercept']:.2f} + {reg['slope']:.2f}*x"
+                        f" (pseudo-R²={reg['pseudo_r2']:.2f}, p={reg['p_value']:.3e})"
+                    )
+
+                    # label = ""
+
+                fig.add_scatter(
+                    x=x_line, y=y_line,
+                    mode="lines", name=label,
+                    line=dict(color=color_line, width=2, dash=dash),
+                )
+
+
+            # Global upper bound (all points)
+            _add_ub(df, suffix=" (all)", color_pt="#5777ec", color_line="#5777ec", dash="dash")
+
+            # Per-highlight upper bound (only if a taxon is selected)
+            if has_highlight and not df_hl.empty:
+                _add_ub(df_hl,
+                        suffix=f" ({hl_val})",
+                        color_pt="#fa4242",
+                        color_line="#fa4242",
+                        dash="dot")
+
+        # ── Regression lines ─────────────────────────────────────────────────────
         palette_reg = px.colors.qualitative.Bold
         show_ci     = self.reg_ci.get()
 
@@ -773,7 +925,7 @@ class SpectroViewer(tk.Tk):
             self._add_regression_traces(
                 fig, df, x, y,
                 label="Global",
-                color="#ffffff" if self.theme_var.get() == "dark" else "#222222",
+                color="#ffffff" if dark else "#222222",
                 show_ci=show_ci,
             )
 
@@ -783,37 +935,41 @@ class SpectroViewer(tk.Tk):
             min_n   = self.reg_min_n.get()
             if tax_col and tax_col in df.columns:
                 groups = df[tax_col].dropna().unique()
-                # Filter groups with enough points
                 valid_groups = [g for g in groups
                                 if df[df[tax_col] == g][[x, y]].dropna().__len__() >= min_n]
                 for i, grp in enumerate(sorted(valid_groups)):
                     sub   = df[df[tax_col] == grp]
-                    color = palette_reg[i % len(palette_reg)]
+                    color_reg = palette_reg[i % len(palette_reg)]
                     self._add_regression_traces(
                         fig, sub, x, y,
                         label=str(grp),
-                        color=color,
+                        color=color_reg,
                         show_ci=show_ci,
                     )
+
+        # ── Build HTML + clipboard JS, open in browser ───────────────────────────
         self._plotly_df = df.reset_index(drop=True)
-        tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False)
+        tmp  = tempfile.NamedTemporaryFile(suffix=".html", delete=False)
         html = fig.to_html(include_plotlyjs="cdn")
 
-        # Injection du JS de copie au clic
         copy_js = """
         <script>
         document.addEventListener("DOMContentLoaded", function() {
             var plot = document.querySelector(".plotly-graph-div");
             plot.on("plotly_click", function(data) {
-                var idx = data.points[0].hovertext;   // hovertext = hover_name = _idx
+                var pt  = data.points[0];
+                // hover_name (_idx) lands in hovertext for px traces,
+                // customdata[0] for go.Scatter traces with customdata
+                var idx = pt.hovertext !== undefined ? pt.hovertext
+                        : (pt.customdata ? pt.customdata[0] : "?");
                 navigator.clipboard.writeText(String(idx)).then(function() {
-                    // Feedback visuel : petit toast
                     var toast = document.createElement("div");
                     toast.textContent = "Index " + idx + " copied!";
-                    toast.style.cssText = "position:fixed;bottom:30px;left:50%;transform:translateX(-50%);"
-                        + "background:#89b4fa;color:#1e1e2e;padding:8px 20px;border-radius:8px;"
-                        + "font-family:Helvetica;font-size:14px;font-weight:bold;z-index:9999;"
-                        + "opacity:1;transition:opacity 1s;";
+                    toast.style.cssText = "position:fixed;bottom:30px;left:50%;"
+                        + "transform:translateX(-50%);"
+                        + "background:#89b4fa;color:#1e1e2e;padding:8px 20px;"
+                        + "border-radius:8px;font-family:Helvetica;font-size:14px;"
+                        + "font-weight:bold;z-index:9999;opacity:1;transition:opacity 1s;";
                     document.body.appendChild(toast);
                     setTimeout(function(){ toast.style.opacity="0"; }, 1500);
                     setTimeout(function(){ toast.remove(); }, 2500);
@@ -824,7 +980,6 @@ class SpectroViewer(tk.Tk):
         """
 
         html = html + copy_js
-
         with open(tmp.name, "w", encoding="utf-8") as f:
             f.write(html)
         webbrowser.open(f"file://{tmp.name}")
