@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.stats import linregress
+from statsmodels.regression.quantile_regression import QuantReg
 
 def upper_bound_regression(
     df,
@@ -79,6 +80,73 @@ def upper_bound_regression(
     return ub, reg
 
 
+def quantile_upper_bound(
+    df,
+    x_col="trill_rate",
+    y_col="bandwidth",
+    quantile=0.90,
+    x_min=None,
+    x_max=None,
+    log_y=False,
+):
+    """
+    Estimate the upper performance bound using quantile regression (Wilson et al. 2014).
+
+    Unlike upper-bound regression (Podos-style binned maxima), this uses all
+    original data points and estimates how changes in the independent variable
+    affect the specified upper quantile of the dependent variable's distribution.
+    Confidence intervals use the rank method (Gutenbrunner & Jureckova 1992),
+    recommended for small samples.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+    x_col : str
+    y_col : str
+    quantile : float
+        Default 0.90 per Wilson et al. 2014. Avoid exceeding 0.95
+        (Cade et al. 1999).
+    x_min, x_max : float or None
+    log_y : bool
+
+    Returns
+    -------
+    reg : dict
+        Keys match upper_bound_regression() output for compatibility
+        with distance_to_upper_bound().
+    """
+    data = df[[x_col, y_col]].dropna().copy()
+    if x_min is not None:
+        data = data[data[x_col] >= x_min]
+    if x_max is not None:
+        data = data[data[x_col] <= x_max]
+
+    y = np.log(data[y_col].values + 1e-9) if log_y else data[y_col].values
+    X = data[x_col].values
+    X_design = np.column_stack([np.ones(len(X)), X])
+
+    result = QuantReg(y, X_design).fit(q=quantile, method="interior")
+    intercept, slope = result.params
+
+    try:
+        ci = result.conf_int(q=quantile)
+    except Exception:
+        ci = [(np.nan, np.nan), (np.nan, np.nan)]
+
+    return {
+        # Keys expected by distance_to_upper_bound
+        "slope":     slope,
+        "intercept": intercept,
+        # Extra diagnostics
+        "ci_slope":      ci[1],
+        "ci_intercept":  ci[0],
+        "pseudo_r2":     result.prsquared,
+        "p_value":       result.pvalues[1],
+        "quantile":      quantile,
+        "n":             len(data),
+    }
+
+
 def distance_to_upper_bound(
     df,
     reg,
@@ -126,6 +194,58 @@ def distance_to_upper_bound(
         return d
     else:
         return np.abs(d)
+    
+def residuals_to_upper_bound(
+    df,
+    reg,
+    x_col="trill_rate",
+    y_col="bandwidth",
+    log_y=False,
+    signed=True
+):
+    """
+    Compute vertical and horizontal residuals from each point to the upper-bound regression.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe with trill_rate and bandwidth
+    reg : dict
+        Regression output from upper_bound_regression()
+    x_col : str
+        X variable name
+    y_col : str
+        Y variable name
+    log_y : bool
+        Whether to log-transform Y before computing residuals
+    signed : bool
+        If True, residuals are signed (negative = below the bound)
+
+    Returns
+    -------
+    residuals : np.ndarray
+        Vertical residual for each row (same order as df)
+    """
+
+    a = reg["slope"]
+    b = reg["intercept"]
+
+    x = df[x_col].values
+    y = df[y_col].values
+
+    if log_y:
+        y = np.log(y + 1e-9)
+
+    y_pred = a * x + b
+    res_y = y - y_pred
+
+    x_pred = (y - b) / a
+    res_x = x - x_pred
+
+    if signed:
+        return res_y, res_x
+    else:
+        return np.abs(res_y), np.abs(res_x)
     
 def performance_orientation(df, reg, x_col="trill_rate", y_col="bandwidth", log_y=False):
     """

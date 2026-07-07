@@ -13,7 +13,7 @@ from plotly.subplots import make_subplots
 from src.config import load_config_yaml
 from src.main import visualize_and_confirm_predictions
 from src.utils.gui_visualizer import launch_gui
-from src.utils.metrics import performance_orientation, upper_bound_regression, distance_to_upper_bound, bill_centroid
+from src.utils.metrics import performance_orientation, upper_bound_regression, quantile_upper_bound, distance_to_upper_bound, residuals_to_upper_bound, bill_centroid
 
 def visualize_best_virtuosity_samples(df, config, x_col="trill_rate", y_col="bandwidth", sorting_metric="dist_to_bound", bin_width=2.0, top_n=5, plot=False):
     df_plot = df.dropna(subset=[sorting_metric])
@@ -69,28 +69,64 @@ def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_c
             title=title,
         )
 
-    if show_upper_bound :
-        ub, reg = upper_bound_regression(
+    # if show_upper_bound :
+    #     ub, reg = upper_bound_regression(
+    #         df_plot,
+    #         x_col=x_col,
+    #         y_col=y_col,
+    #         log_y=logy)
+
+    #     fig.add_trace(
+    #         go.Scatter(
+    #             x=ub[x_col],
+    #             y=ub[y_col],
+    #             mode="markers",
+    #             marker=dict(color="red", size=8),
+    #             name="Upper bound points",
+    #         )
+    #     )
+
+    #     x_line = np.linspace(ub[x_col].min(), ub[x_col].max(), 200)
+    #     if logy:
+    #         y_line = np.exp(reg["intercept"] + reg["slope"] * x_line)
+    #     else:
+    #         y_line = reg["intercept"] + reg["slope"] * x_line
+
+    #     fig.add_trace(
+    #         go.Scatter(
+    #             x=x_line,
+    #             y=y_line,
+    #             mode="lines",
+    #             line=dict(color="red", dash="dash"),
+    #             name=f"Upper-bound regression: y = {reg['intercept']:.2f} + {reg['slope']:.2f}*x (R={reg['r_value']:.2f}, p={reg['p_value']:.3e})",
+    #         )
+    #     )
+
+    if show_upper_bound:
+        reg = quantile_upper_bound(
             df_plot,
             x_col=x_col,
             y_col=y_col,
-            log_y=logy)
-
-        fig.add_trace(
-            go.Scatter(
-                x=ub[x_col],
-                y=ub[y_col],
-                mode="markers",
-                marker=dict(color="red", size=8),
-                name="Upper bound points",
-            )
+            log_y=logy
         )
 
-        x_line = np.linspace(ub[x_col].min(), ub[x_col].max(), 200)
+        x_line = np.linspace(df_plot[x_col].min(), df_plot[x_col].max(), 200)
         if logy:
             y_line = np.exp(reg["intercept"] + reg["slope"] * x_line)
         else:
             y_line = reg["intercept"] + reg["slope"] * x_line
+
+        # Label adapts to whichever method was used
+        if "r_value" in reg:
+            label = (
+                f"Upper-bound regression: y = {reg['intercept']:.2f} + {reg['slope']:.2f}*x"
+                f" (R={reg['r_value']:.2f}, p={reg['p_value']:.3e})"
+            )
+        else:
+            label = (
+                f"Quantile regression (q={reg['quantile']}): y = {reg['intercept']:.2f} + {reg['slope']:.2f}*x"
+                f" (pseudo-R²={reg['pseudo_r2']:.2f}, p={reg['p_value']:.3e})"
+            )
 
         fig.add_trace(
             go.Scatter(
@@ -98,19 +134,19 @@ def plot_virtuosity(df, x_col="trill_rate", y_col="bandwidth", logy=False, hue_c
                 y=y_line,
                 mode="lines",
                 line=dict(color="red", dash="dash"),
-                name=f"Upper-bound regression: y = {reg['intercept']:.2f} + {reg['slope']:.2f}*x (R={reg['r_value']:.2f}, p={reg['p_value']:.3e})",
+                name=label,
             )
         )
 
-    fig.update_layout(
-        xaxis_title=f"{x_col} (trills/sec)",
-        yaxis_title=ylabel,
-        title=title,
-        showlegend=True,
-        # grid=True,
-    )
+        fig.update_layout(
+            xaxis_title=f"{x_col} (trills/sec)",
+            yaxis_title=ylabel,
+            title=title,
+            showlegend=True,
+            # grid=True,
+        )
 
-    fig.show()
+        fig.show()
 
 def plot_dist_vs_traits_plotly(df, hue_col, title_suffix):
     traits = [
@@ -165,10 +201,10 @@ def plot_dist_vs_traits_plotly(df, hue_col, title_suffix):
 
     
 def prepare_dataset(df):
-    df["file_name"] = df.apply(
-        lambda r: f"{r['file_name_radical'].split('.')[0]}_seg{r['segment_id']}.wav",
-        axis=1
-    )
+    # df["file_name"] = df.apply(
+    #     lambda r: f"{r['file_name_radical'].split('.')[0]}_seg{r['segment_id']}.wav",
+    #     axis=1
+    # )
 
     df["trill_duration"] = df["t_max"] - df["t_min"]
     df["trill_rate"] = df.apply(
@@ -218,6 +254,97 @@ def prepare_dataset(df):
         signed=True
     )
 
+    quantile_reg = quantile_upper_bound(
+        df_filtered,
+        x_col="trill_rate",
+        y_col="bandwidth",
+        quantile=0.90,
+        x_min=2,
+        log_y=False
+    )
+
+    df_filtered["dist_to_quantile_bound"] = distance_to_upper_bound(
+        df_filtered,
+        quantile_reg,
+        x_col="trill_rate",
+        y_col="bandwidth",
+        signed=True
+    )
+
+    df_filtered["residual_to_quantile_bound_y"], df_filtered["residual_to_quantile_bound_x"] = residuals_to_upper_bound(
+        df_filtered,
+        quantile_reg,
+        x_col="trill_rate",
+        y_col="bandwidth"
+    )
+
+    # --- Per-family upper bound ---
+
+    def get_adaptive_bin_width(group, x_col="trill_rate", n_bins=10, min_bin_width=0.5):
+        x_range = group[x_col].max() - group[x_col].min()
+        bin_width = x_range / n_bins
+        return max(bin_width, min_bin_width)
+
+    family_regs = {}
+    family_regs_quantile = {}
+    dist_family_list = []
+    dist_family_quantiles_list = []
+    residuals_family_quantiles_list_x = []
+    residuals_family_quantiles_list_y = []
+
+    for family, group in df_filtered.groupby("family"):
+        print(f"Processing family {family} with {len(group)} samples...")
+        if len(group) < 10:  # skip families with too few observations
+            dist_family_list.append(pd.Series(np.nan, index=group.index))
+            dist_family_quantiles_list.append(pd.Series(np.nan, index=group.index))
+            continue
+        try:
+            # Orthogonal regression to upper bound
+            bin_width_fam = get_adaptive_bin_width(group, x_col="trill_rate", n_bins=10)
+            _, reg_fam = upper_bound_regression(
+                group, x_col="trill_rate", y_col="bandwidth",
+                bin_width=bin_width_fam, x_min=2, log_y=False
+            )
+            family_regs[family] = reg_fam
+            dists = distance_to_upper_bound(
+                group, reg_fam, x_col="trill_rate", y_col="bandwidth", signed=True
+            )
+            dist_family_list.append(pd.Series(dists, index=group.index))
+
+            # Quantile regression to upper bound
+            reg_fam_quantile = quantile_upper_bound(
+                group, x_col="trill_rate", y_col="bandwidth",
+                quantile=0.90, x_min=2, log_y=False
+            )
+            family_regs_quantile[family] = reg_fam_quantile
+            dists_quantile = distance_to_upper_bound(
+                group, reg_fam_quantile, x_col="trill_rate", y_col="bandwidth", signed=True
+            )
+            dist_family_quantiles_list.append(pd.Series(dists_quantile, index=group.index))
+
+            # Residuals to quantile bound
+            res_y, res_x = residuals_to_upper_bound(
+                group,
+                reg_fam_quantile,
+                x_col="trill_rate",
+                y_col="bandwidth"
+            )
+            residuals_family_quantiles_list_y.append(pd.Series(res_y, index=group.index))
+            residuals_family_quantiles_list_x.append(pd.Series(res_x, index=group.index))
+
+        except Exception as e:
+            print(f"Warning: could not fit upper bound for family {family}: {e}")
+            dist_family_list.append(pd.Series(np.nan, index=group.index))
+            dist_family_quantiles_list.append(pd.Series(np.nan, index=group.index))
+            residuals_family_quantiles_list_y.append(pd.Series(np.nan, index=group.index))
+            residuals_family_quantiles_list_x.append(pd.Series(np.nan, index=group.index))
+
+    df_filtered["dist_to_bound_family"] = pd.concat(dist_family_list).reindex(df_filtered.index)
+    df_filtered["dist_to_quantile_bound_family"] = pd.concat(dist_family_quantiles_list).reindex(df_filtered.index)
+    df_filtered["residual_to_quantile_bound_y_family"] = pd.concat(residuals_family_quantiles_list_y).reindex(df_filtered.index)
+    df_filtered["residual_to_quantile_bound_x_family"] = pd.concat(residuals_family_quantiles_list_x).reindex(df_filtered.index)
+
+    # --- Vocal deviation metrics (global bound) ---
     vocal_deviation_metrics = performance_orientation(df_filtered, reg, x_col="trill_rate", y_col="bandwidth", log_y=False)
     df_filtered = pd.concat([df_filtered, vocal_deviation_metrics], axis=1)
 
@@ -225,7 +352,10 @@ def prepare_dataset(df):
         "reg": reg,
         "ub_df": ub_df,
         "reg_podos": reg_podos,
-        "ub_df_podos": ub_df_podos
+        "ub_df_podos": ub_df_podos,
+        "quantile_reg": quantile_reg,
+        "family_regs": family_regs,
+        "family_regs_quantile": family_regs_quantile,
     }
 
     return df_filtered, regression_results
@@ -238,6 +368,10 @@ def load_meta_and_morpho(DATA_DIR, file_timestamps, file_meta, file_morpho):
 
 
     df_morpho["logmass"] = np.log(df_morpho["mass"])
+    df_morpho["log_beak_length"] = np.log(df_morpho["Beak.Length_Culmen"])
+    df_morpho["log_beak_width"] = np.log(df_morpho["Beak.Width"])
+    df_morpho["log_beak_depth"] = np.log(df_morpho["Beak.Depth"])
+
     df_morpho["bill_centroid"], df_morpho["log_bill_centroid"] = bill_centroid(df_morpho)
     df_morpho["log_bill_centroid_over_logmass"] = df_morpho["log_bill_centroid"] / df_morpho["logmass"]
 
@@ -282,11 +416,17 @@ def main():
         file_morpho = "model_traits_morpho_social_data.csv"
 
         df_pred = pd.read_csv(os.path.join(config.data_processed_subdir, pred_annotation_file))
+        df_pred["file_name"] = df_pred.apply(
+            lambda r: f"{r['file_name_radical'].split('.')[0]}_seg{r['segment_id']}.wav",
+            axis=1
+        )
 
-        df_pred_filtered, regression_results = prepare_dataset(df_pred)
-        
         df_merged = load_meta_and_morpho(config.data_raw_subdir, file_timestamps, file_meta, file_morpho)
-        df_merged = pd.merge(df_pred_filtered, df_merged, on="file_name", how="inner")
+        df_merged = pd.merge(df_pred, df_merged, on="file_name", how="inner")
+
+        df_merged, regression_results = prepare_dataset(df_merged)
+        
+        
 
     print("\n" + "="*70)
     print("WORKFLOW OPTIONS")
@@ -343,7 +483,7 @@ def main():
         
     elif choice == "4":
         df_out = df_merged.copy()
-        output_final = os.path.join(config.data_processed_subdir, "full_dataset_prediction.csv")
+        output_final = os.path.join(config.data_processed_subdir, "full_dataset_prediction_quantiles_v2.csv")
         os.makedirs(os.path.dirname(output_final), exist_ok=True)
         df_out.to_csv(output_final, index=False)
 
